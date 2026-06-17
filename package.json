@@ -1,0 +1,13 @@
+{
+  "name": "deepflow-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DeepFlow MVP local prototype",
+  "scripts": {
+    "build": "node scripts/build-web.mjs",
+    "build:mac": "bash scripts/build-macos-app.sh",
+    "icons": "node scripts/generate-icons.mjs",
+    "start": "python3 -m http.server 4173",
+    "serve": "python3 -m http.server 4173"
+  }
+}
