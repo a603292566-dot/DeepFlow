@@ -4,6 +4,9 @@ build/
 node_modules/
 .vercel/
 .netlify/
+.env*
+!.env.example
+env-config.js
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

@@ -1,11 +1,13 @@
-const CACHE_NAME = "deepflow-shell-v1";
+const CACHE_NAME = "deepflow-shell-v2";
 
 const APP_SHELL = [
   "/",
   "/index.html",
+  "/env-config.js",
   "/manifest.webmanifest",
   "/src/styles.css",
   "/src/app.js",
+  "/src/cloudSync.js",
   "/src/domain.js",
   "/src/identityReportTemplates.js",
   "/src/promptEngine.js",

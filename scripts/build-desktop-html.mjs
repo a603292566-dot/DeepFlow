@@ -13,8 +13,36 @@ function stripModules(source) {
   return source
     .replace(/import\s+[\s\S]*?from\s+".*?";\n/g, "")
     .replace(/export\s+const\s+/g, "const ")
+    .replace(/export\s+async\s+function\s+/g, "async function ")
     .replace(/export\s+function\s+/g, "function ");
 }
+
+async function readLocalEnv() {
+  try {
+    const source = await readFile(resolve(rootDir, ".env.local"), "utf8");
+    return Object.fromEntries(
+      source
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"))
+        .map((line) => {
+          const index = line.indexOf("=");
+          if (index < 0) return [line, ""];
+          return [line.slice(0, index), line.slice(index + 1)];
+        })
+    );
+  } catch {
+    return {};
+  }
+}
+
+const localEnv = await readLocalEnv();
+const browserEnv = {
+  NEXT_PUBLIC_SUPABASE_URL:
+    process.env.NEXT_PUBLIC_SUPABASE_URL || localEnv.NEXT_PUBLIC_SUPABASE_URL || "",
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || localEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || ""
+};
 
 const css = await readFile(resolve(rootDir, "src/styles.css"), "utf8");
 const sources = [
@@ -23,6 +51,7 @@ const sources = [
   "src/scoring.js",
   "src/storage.js",
   "src/promptEngine.js",
+  "src/cloudSync.js",
   "src/app.js"
 ];
 const scripts = await Promise.all(
@@ -40,6 +69,7 @@ const html = `<!doctype html>
   <body>
     <div id="app"></div>
     <script>
+window.DEEPFLOW_ENV = ${JSON.stringify(browserEnv, null, 2)};
 ${scripts.join("\n")}
     </script>
   </body>

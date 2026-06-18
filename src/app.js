@@ -2,13 +2,33 @@ import {
   DIMENSION_LABELS,
   IDENTITY_HINTS,
   IDENTITY_LABELS,
-  LEARNING_CATEGORIES,
-  LEARNING_GOALS,
+  LANGUAGE_MODULE_PLANS,
+  LANGUAGE_TARGETS,
+  LEARNING_MODULES,
+  MODULE_GOALS,
+  MODULE_LEVELS,
+  MODULE_SUBJECTS,
+  MODE_DURATION,
   MODE_LABELS,
-  QUESTIONNAIRE_ITEMS
+  PROGRAMMING_GOAL_EVIDENCE_MAP,
+  PROGRAMMING_LEVEL_EVIDENCE,
+  QUESTIONNAIRE_ITEMS,
+  SPECIAL_GOALS_BY_PATH,
+  STATUS_OPTIONS
 } from "./domain.js";
 import { getIdentityReportTemplate } from "./identityReportTemplates.js";
-import { defaultLanguageProfile, generatePrompt, goalById } from "./promptEngine.js";
+import { defaultLanguageProfile, generatePrompt } from "./promptEngine.js";
+import {
+  clearCloudConfig,
+  cloudConfigPreview,
+  flushCloudQueue,
+  getCloudConfig,
+  getCloudSyncStatus,
+  hasEnvCloudConfig,
+  queueCloudEvent,
+  queueTestCloudEvent,
+  saveCloudConfig
+} from "./cloudSync.js";
 import {
   applyExp,
   bonusText,
@@ -30,8 +50,20 @@ const PROFILE_DATA_FIELDS = [
   "prompts",
   "sessions",
   "evidence",
+  "selectedLearningModuleId",
   "selectedCategory",
   "selectedGoalId",
+  "selectedSubjectId",
+  "selectedCurrentLevelId",
+  "selectedGoalBranchId",
+  "selectedLearningGoalId",
+  "selectedTrainingMode",
+  "currentStatusId",
+  "energyLevel",
+  "fatigueLevel",
+  "focusLevel",
+  "motivationLevel",
+  "plannedDuration",
   "activePromptId",
   "activeSessionId",
   "lastCompletedSession",
@@ -155,32 +187,232 @@ function addEvidence(nextState, type, label, sessionId) {
   };
 }
 
+function collectedLevelEvidence(nextState, levelEvidence) {
+  if (!levelEvidence?.requiredEvidence) return [];
+  const validIds = new Set(levelEvidence.requiredEvidence.map((item) => item.id));
+  const evidenceIds = new Set();
+
+  for (const evidence of nextState.evidence || []) {
+    for (const evidenceId of evidence.levelEvidenceIds || []) {
+      if (validIds.has(evidenceId)) evidenceIds.add(evidenceId);
+    }
+  }
+
+  return levelEvidence.requiredEvidence.filter((item) => evidenceIds.has(item.id));
+}
+
+function learningModuleById(moduleId) {
+  return LEARNING_MODULES.find((module) => module.id === moduleId);
+}
+
+function subjectsForModule(moduleId) {
+  return MODULE_SUBJECTS[moduleId] || [];
+}
+
+function subjectById(moduleId, subjectId) {
+  return subjectsForModule(moduleId).find((subject) => subject.id === subjectId);
+}
+
+function languageTargetById(targetId) {
+  const aliases = {
+    german_b2: "german_telc_b2",
+    german_c1: "german_telc_c1"
+  };
+  const normalizedId = aliases[targetId] || targetId;
+  return LANGUAGE_TARGETS.find((target) => target.id === normalizedId);
+}
+
+function levelsForModule(moduleId) {
+  return MODULE_LEVELS[moduleId] || [];
+}
+
+function levelById(moduleId, levelId) {
+  return levelsForModule(moduleId).find((level) => level.id === levelId);
+}
+
+function goalsForModule(moduleId) {
+  return MODULE_GOALS[moduleId] || [];
+}
+
+function specialGoalPathKey(moduleId, subjectId, levelId) {
+  return `${moduleId}:${subjectId}:${levelId}`;
+}
+
+function goalsForPath(moduleId, subjectId, levelId) {
+  return SPECIAL_GOALS_BY_PATH[specialGoalPathKey(moduleId, subjectId, levelId)] || goalsForModule(moduleId);
+}
+
+function currentGoals() {
+  if (state.selectedLearningModuleId === "language") {
+    return LANGUAGE_TARGETS.filter((target) => target.subjectId === state.selectedSubjectId);
+  }
+  return goalsForPath(state.selectedLearningModuleId, state.selectedSubjectId, state.selectedCurrentLevelId);
+}
+
+function learningGoalById(moduleId, goalId, subjectId = null, levelId = null) {
+  return goalsForPath(moduleId, subjectId, levelId).find((goal) => goal.id === goalId);
+}
+
+function statusById(statusId) {
+  return STATUS_OPTIONS.find((status) => status.id === statusId);
+}
+
+function currentLearningModule() {
+  return learningModuleById(state.selectedLearningModuleId || state.selectedCategory);
+}
+
+function currentSubject() {
+  const moduleId = state.selectedLearningModuleId || state.selectedCategory;
+  return subjectById(moduleId, state.selectedSubjectId);
+}
+
+function currentLevel() {
+  const moduleId = state.selectedLearningModuleId || state.selectedCategory;
+  return levelById(moduleId, state.selectedCurrentLevelId);
+}
+
+function currentLearningGoal() {
+  const moduleId = state.selectedLearningModuleId || state.selectedCategory;
+  if (moduleId === "language") return languageTargetById(state.selectedLearningGoalId || state.selectedGoalId);
+  return learningGoalById(
+    moduleId,
+    state.selectedLearningGoalId || state.selectedGoalBranchId || state.selectedGoalId,
+    state.selectedSubjectId,
+    state.selectedCurrentLevelId
+  );
+}
+
+function autoLanguageModulePlan(mode, languageTarget = null) {
+  const plan = LANGUAGE_MODULE_PLANS[mode] || LANGUAGE_MODULE_PLANS.light_start;
+  if (languageTarget?.targetLanguage !== "英语") return plan;
+  return {
+    ...plan,
+    modules: plan.modules.map((module) =>
+      module
+        .replace("Sprachbausteine / 语块积累", "chunks / 表达块积累")
+        .replace("Sprachbausteine 复习", "表达块复习")
+    )
+  };
+}
+
+function createGoalFromSelection(nextState) {
+  const moduleId = nextState.selectedLearningModuleId || nextState.selectedCategory;
+  const module = learningModuleById(moduleId);
+  const languageTarget = moduleId === "language" ? languageTargetById(nextState.selectedLearningGoalId || nextState.selectedGoalId) : null;
+  const subject = languageTarget
+    ? subjectById(moduleId, languageTarget.subjectId)
+    : subjectById(moduleId, nextState.selectedSubjectId);
+  const currentLevel = languageTarget
+    ? levelById(moduleId, languageTarget.levelId)
+    : levelById(moduleId, nextState.selectedCurrentLevelId);
+  const learningGoal = languageTarget || learningGoalById(
+    moduleId,
+    nextState.selectedLearningGoalId || nextState.selectedGoalBranchId,
+    nextState.selectedSubjectId,
+    nextState.selectedCurrentLevelId
+  );
+
+  return {
+    id: learningGoal?.id || nextState.selectedLearningGoalId || nextState.selectedGoalBranchId,
+    category: module?.id || moduleId || "learning",
+    label: `${subject?.label || "学习"} · ${learningGoal?.label || "学习目标"}`,
+    moduleLabel: module?.label,
+    subjectLabel: subject?.label,
+    targetLanguage: learningGoal?.targetLanguage || subject?.targetLanguage,
+    targetLevel: currentLevel?.label,
+    examGoal: learningGoal?.label
+  };
+}
+
 function createPrompt(nextState, mode) {
-  const goal = goalById(nextState.selectedGoalId);
+  const moduleId = nextState.selectedLearningModuleId || nextState.selectedCategory;
+  const learningModule = learningModuleById(moduleId);
+  const languageTarget = moduleId === "language" ? languageTargetById(nextState.selectedLearningGoalId || nextState.selectedGoalId) : null;
+  const subject = languageTarget
+    ? subjectById(moduleId, languageTarget.subjectId)
+    : subjectById(moduleId, nextState.selectedSubjectId);
+  const currentLevel = languageTarget
+    ? levelById(moduleId, languageTarget.levelId)
+    : levelById(moduleId, nextState.selectedCurrentLevelId);
+  const learningGoal = languageTarget || learningGoalById(
+    moduleId,
+    nextState.selectedLearningGoalId || nextState.selectedGoalBranchId,
+    nextState.selectedSubjectId,
+    nextState.selectedCurrentLevelId
+  );
+  const goal = createGoalFromSelection(nextState);
+  const currentStatus = statusById(nextState.currentStatusId);
+  const plannedDuration = nextState.plannedDuration || currentStatus?.plannedDuration || MODE_DURATION[mode];
+  const levelEvidence = PROGRAMMING_LEVEL_EVIDENCE[currentLevel?.id] || null;
+  const collectedEvidence = collectedLevelEvidence(nextState, levelEvidence);
+  const likelyEvidenceIds = PROGRAMMING_GOAL_EVIDENCE_MAP[learningGoal?.id] || [];
+  const generatedModulePlan = moduleId === "language" ? autoLanguageModulePlan(mode, languageTarget) : null;
   const context = {
     user: nextState.user,
     identity: nextState.identity,
     parameters: nextState.parameters,
-    category: nextState.selectedCategory,
+    category: goal.category,
     goal,
+    learningModule,
+    subject,
+    currentLevel,
+    learningGoal,
+    generatedModulePlan,
+    autoSelectedModule: generatedModulePlan?.modules?.join(" + ") || "",
+    levelEvidence,
+    collectedEvidence,
+    likelyEvidenceIds,
+    goalBranch: learningGoal,
+    trainingMode: mode,
+    duration: plannedDuration,
+    plannedDuration,
+    currentStatus: currentStatus?.label || "状态已记录",
+    energyLevel: nextState.energyLevel ?? currentStatus?.energyLevel ?? null,
+    fatigueLevel: nextState.fatigueLevel ?? currentStatus?.fatigueLevel ?? null,
+    focusLevel: nextState.focusLevel ?? currentStatus?.focusLevel ?? null,
+    motivationLevel: nextState.motivationLevel ?? currentStatus?.motivationLevel ?? 6,
+    learnerIdentity: nextState.identity.mainIdentity,
+    secondaryIdentity: nextState.identity.secondaryIdentity,
+    expBonusDirection: bonusText(nextState.identity.mainIdentity),
     mode,
     currentState: "normal",
     recentSessions: nextState.sessions.slice(-3),
     recentEvidence: nextState.evidence.slice(-5),
     activeBonusText: bonusText(nextState.identity.mainIdentity),
     languageProfile:
-      nextState.selectedCategory === "language" ? defaultLanguageProfile(nextState.user.id, goal) : null
+      moduleId === "language" ? defaultLanguageProfile(nextState.user.id, goal) : null
   };
   const generated = {
     id: makeId("prompt"),
     userId: nextState.user.id,
-    category: nextState.selectedCategory,
-    goalId: nextState.selectedGoalId,
+    category: goal.category,
+    goalId: goal.id,
+    learningModuleId: learningModule?.id,
+    learningModule: learningModule?.label,
+    subjectId: subject?.id,
+    subject: subject?.label,
+    currentLevelId: currentLevel?.id,
+    currentLevel: currentLevel?.label,
+    learningGoalId: learningGoal?.id,
+    learningGoal: learningGoal?.label,
+    goalBranchId: learningGoal?.id,
+    generatedModulePlan,
+    autoSelectedModule: context.autoSelectedModule,
+    levelEvidenceId: levelEvidence ? currentLevel?.id : null,
+    likelyEvidenceIds,
+    currentStatus: context.currentStatus,
+    energyLevel: context.energyLevel,
+    fatigueLevel: context.fatigueLevel,
+    focusLevel: context.focusLevel,
+    motivationLevel: context.motivationLevel,
+    plannedDuration,
     mode,
     identity: nextState.identity.mainIdentity,
     text: generatePrompt(context),
     createdAt: now()
   };
+
+  queueCloudEvent("prompt_generated", nextState, { prompt: generated });
 
   return {
     ...nextState,
@@ -222,7 +454,23 @@ async function copyText(text) {
 }
 
 function categoryLabel(categoryId) {
-  return LEARNING_CATEGORIES.find((category) => category.id === categoryId)?.label || categoryId;
+  const module = learningModuleById(categoryId);
+  if (module) return module.label;
+  return categoryId || "学习";
+}
+
+function goalLabel(goalId) {
+  const languageTarget = languageTargetById(goalId);
+  if (languageTarget) return languageTarget.label;
+  for (const module of LEARNING_MODULES) {
+    const goal = goalsForModule(module.id).find((item) => item.id === goalId);
+    if (goal) return goal.label;
+    for (const goals of Object.values(SPECIAL_GOALS_BY_PATH)) {
+      const specialGoal = goals.find((item) => item.id === goalId);
+      if (specialGoal) return specialGoal.label;
+    }
+  }
+  return goalId || "学习目标";
 }
 
 function formatTimer(session) {
@@ -254,12 +502,13 @@ function shell(content) {
         </label>
         <button class="ghost" data-action="create-new-role">创建新角色</button>
         ${state.identity ? `<button class="ghost" data-action="home">角色卡</button>` : ""}
+        <button class="ghost" data-action="cloud-settings">云端同步</button>
         <button class="ghost" data-action="install-help">添加到主屏幕</button>
       </div>
     `
     : state.identity
-      ? `<div class="profile-controls"><button class="ghost" data-action="create-new-role">创建新角色</button><button class="ghost" data-action="home">角色卡</button><button class="ghost" data-action="install-help">添加到主屏幕</button></div>`
-      : `<div class="profile-controls"><button class="ghost" data-action="install-help">添加到主屏幕</button></div>`;
+      ? `<div class="profile-controls"><button class="ghost" data-action="create-new-role">创建新角色</button><button class="ghost" data-action="home">角色卡</button><button class="ghost" data-action="cloud-settings">云端同步</button><button class="ghost" data-action="install-help">添加到主屏幕</button></div>`
+      : `<div class="profile-controls"><button class="ghost" data-action="cloud-settings">云端同步</button><button class="ghost" data-action="install-help">添加到主屏幕</button></div>`;
 
   return `
     <main class="app-shell">
@@ -332,6 +581,51 @@ function renderInstallHelp() {
           </ol>
         </article>
       </div>
+    </section>
+  `);
+}
+
+function renderCloudSettings() {
+  const config = getCloudConfig();
+  const status = getCloudSyncStatus();
+  const envConfigured = hasEnvCloudConfig();
+  const returnAction = state.identity ? "home" : "welcome";
+  return shell(`
+    <section class="panel cloud-settings">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">云端同步</p>
+          <h2>Supabase 测试数据库</h2>
+        </div>
+        <button class="ghost" data-action="${returnAction}">返回</button>
+      </div>
+      <p class="muted">DeepFlow 会继续优先保存在本地；配置 Supabase 后，会把关键学习事件同步到云端，方便你在 Supabase Table Editor 里浏览测试数据。</p>
+      ${envConfigured ? `<p class="notice">已检测到环境变量配置。下面表单可留空，或用于临时覆盖。</p>` : ""}
+      <form id="cloud-settings-form" class="settings-form">
+        <label>
+          <span>Supabase Project URL</span>
+          <input name="supabaseUrl" value="${config.supabaseUrl || ""}" placeholder="https://xxxx.supabase.co" />
+        </label>
+        <label>
+          <span>anon public key</span>
+          <input name="anonKey" value="${config.anonKey || ""}" placeholder="只填写 anon public key，不要填写 service role key" />
+        </label>
+        <div class="actions-row">
+          <button class="primary" type="submit">保存并同步</button>
+          <button class="secondary" type="button" data-action="test-cloud">测试连接 / 发送测试事件</button>
+          <button class="ghost" type="button" data-action="flush-cloud">立即同步队列</button>
+          <button class="ghost" type="button" data-action="clear-cloud">清除配置</button>
+        </div>
+      </form>
+      <div class="sync-status">
+        <p>当前配置：${cloudConfigPreview()}</p>
+        <p>同步状态：${status.configured ? "已配置" : "未配置"}</p>
+        <p>待同步事件：${status.queueCount || 0}</p>
+        <p>最近同步：${status.lastSyncedAt || "暂无"}</p>
+        <p>最近测试：${status.lastTestAt || "暂无"}</p>
+        ${status.lastError ? `<p class="notice">最近错误：${status.lastError}</p>` : ""}
+      </div>
+      <p class="muted">管理者界面：打开 Supabase Dashboard → Table Editor → deepflow_sync_events。</p>
     </section>
   `);
 }
@@ -527,28 +821,110 @@ function renderCategorySelect() {
   return shell(`
     ${renderRoleCard()}
     <section class="panel">
-      <p class="eyebrow">学习内容</p>
-      <h2>选择一个入口</h2>
+      <p class="eyebrow">Step 1 / New Session</p>
+      <h2>选择学习模块</h2>
       <div class="choice-grid">
-        ${LEARNING_CATEGORIES.map((category) => `
-          <button class="choice" data-action="choose-category" data-category="${category.id}">${category.label}</button>
+        ${LEARNING_MODULES.map((module) => `
+          <button class="choice" data-action="choose-learning-module" data-module="${module.id}">${module.label}</button>
         `).join("")}
       </div>
     </section>
   `);
 }
 
-function renderGoalSelect() {
-  const goals = LEARNING_GOALS.filter((goal) => goal.category === state.selectedCategory);
+function renderSubjectSelect() {
+  const module = currentLearningModule();
+  const subjects = subjectsForModule(state.selectedLearningModuleId);
   return shell(`
     ${renderRoleCard()}
     <section class="panel">
-      <p class="eyebrow">学习目标</p>
-      <h2>选择本次目标</h2>
+      <p class="eyebrow">Step 2 / ${module?.label || "学习模块"}</p>
+      <h2>${state.selectedLearningModuleId === "language" ? "选择目标语言" : "选择具体学科"}</h2>
+      <div class="choice-grid">
+        ${subjects.map((subject) => `
+          <button class="choice" data-action="choose-subject" data-subject="${subject.id}">${subject.label}</button>
+        `).join("")}
+      </div>
+      <div class="actions-row">
+        <button class="ghost" data-action="select-category">返回学习模块</button>
+      </div>
+    </section>
+  `);
+}
+
+function renderCurrentLevelSelect() {
+  const module = currentLearningModule();
+  const subject = currentSubject();
+  const levels = levelsForModule(state.selectedLearningModuleId);
+  return shell(`
+    ${renderRoleCard()}
+    <section class="panel">
+      <p class="eyebrow">Step 3 / ${module?.label || "学习模块"} · ${subject?.label || "具体学科"}</p>
+      <h2>选择当前水平</h2>
+      <div class="choice-grid">
+        ${levels.map((level) => `
+          <button class="choice" data-action="choose-current-level" data-level="${level.id}">${level.label}</button>
+        `).join("")}
+      </div>
+      <div class="actions-row">
+        <button class="ghost" data-action="module-back">返回具体学科</button>
+      </div>
+    </section>
+  `);
+}
+
+function renderGoalBranchSelect() {
+  const module = currentLearningModule();
+  const subject = currentSubject();
+  const level = currentLevel();
+  const goals = currentGoals();
+  const isLanguage = state.selectedLearningModuleId === "language";
+  return shell(`
+    ${renderRoleCard()}
+    <section class="panel">
+      <p class="eyebrow">${isLanguage ? `Step 3 / ${subject?.label || "目标语言"}` : `Step 4 / ${subject?.label || "具体学科"} · ${level?.label || "当前水平"}`}</p>
+      <h2>${isLanguage ? `选择${subject?.label || "语言"}目标` : "选择学习目标"}</h2>
       <div class="choice-grid">
         ${goals.map((goal) => `
-          <button class="choice" data-action="choose-goal" data-goal="${goal.id}">${goal.label}</button>
+          <button class="choice" data-action="choose-learning-goal" data-goal="${goal.id}">
+            ${goal.label}
+            ${goal.subtitle ? `<br><span>${goal.subtitle}</span>` : ""}
+          </button>
         `).join("")}
+      </div>
+      <div class="actions-row">
+        <button class="ghost" data-action="${isLanguage ? "module-back" : "level-back"}">${isLanguage ? "返回语言选择" : "返回当前水平"}</button>
+      </div>
+    </section>
+  `);
+}
+
+function renderStatusAssessment() {
+  const module = currentLearningModule();
+  const subject = currentSubject();
+  const level = currentLevel();
+  const learningGoal = currentLearningGoal();
+  const isLanguage = state.selectedLearningModuleId === "language";
+
+  return shell(`
+    ${renderRoleCard()}
+    <section class="panel">
+      <p class="eyebrow">Step 5 / 当前状态</p>
+      <h2>现在状态如何？</h2>
+      <p class="muted">DeepFlow 会根据你的状态自动调整任务强度。</p>
+      <div class="learning-path-summary">
+        <span>模块：${module?.label || "未选择"}</span>
+        <span>学科：${subject?.label || "未选择"}</span>
+        <span>水平：${level?.label || "未选择"}</span>
+        <span>${isLanguage ? "目标" : "目标"}：${learningGoal?.label || "未选择"}</span>
+      </div>
+      <div class="choice-grid">
+        ${STATUS_OPTIONS.map((status) => `
+          <button class="choice" data-action="choose-current-status" data-status="${status.id}">${status.label}</button>
+        `).join("")}
+      </div>
+      <div class="actions-row">
+        <button class="ghost" data-action="branch-back">返回${isLanguage ? "目标等级" : "学习目标"}</button>
       </div>
     </section>
   `);
@@ -570,17 +946,34 @@ function renderInstructionGuide() {
 }
 
 function renderInstructionIntro() {
-  const goal = goalById(state.selectedGoalId);
+  const module = currentLearningModule();
+  const subject = currentSubject();
+  const level = currentLevel();
+  const learningGoal = currentLearningGoal();
+  const mode = state.selectedTrainingMode || "light_start";
+  const status = statusById(state.currentStatusId);
+  const isLanguage = state.selectedLearningModuleId === "language";
   return shell(`
     ${renderInstructionGuide()}
     ${renderRoleCard()}
     <section class="panel instruction-intro">
-      <p class="eyebrow">生成学习指令</p>
-      <h2>${goal.label}</h2>
-      <p class="muted">DeepFlow 会根据你的学习者身份和学习目标，生成一段给 AI 老师的学习指令。你只需要复制它，粘贴到 ChatGPT / Claude 等 AI 工具中学习。学完后回到 DeepFlow 点击完成，系统会记录时间并生成成长反馈。</p>
+      <p class="eyebrow">Step 6 / 生成 Prompt（提示词）</p>
+      <h2>${isLanguage ? `开始一次${learningGoal?.label || subject?.label} ${MODE_LABELS[mode]}` : `${subject?.label} · ${learningGoal?.label}`}</h2>
+      <div class="learning-path-summary">
+        <span>学习模块：${module?.label}</span>
+        <span>当前水平：${level?.label}</span>
+        <span>当前状态：${status?.label || "已记录"}</span>
+        <span>训练模式：${MODE_LABELS[mode]}</span>
+        <span>预计时长：${state.plannedDuration || MODE_DURATION[mode]}</span>
+      </div>
+      <p class="muted">${
+        isLanguage
+          ? "DeepFlow 会根据你的学习者身份、当前状态和历史复习内容，自动生成本次 AI 学习指令。你不需要手动选择阅读、词汇或写作模块。"
+          : "DeepFlow 会根据你的学习者身份和学习目标，生成一段给 AI 老师的学习指令。你只需要复制它，粘贴到 ChatGPT / Claude 等 AI 工具中学习。学完后回到 DeepFlow 点击完成，系统会记录时间并生成成长反馈。"
+      }</p>
       <div class="actions-row">
         <button class="primary" data-action="generate-instruction">生成 AI 学习指令</button>
-        <button class="ghost" data-action="goal-back">重新选择目标</button>
+        <button class="ghost" data-action="mode-back">返回当前状态</button>
       </div>
     </section>
   `);
@@ -588,7 +981,7 @@ function renderInstructionIntro() {
 
 function renderLearningInstruction() {
   const prompt = activePrompt();
-  const goal = goalById(prompt.goalId);
+  const branchLabel = goalLabel(prompt.goalId);
   return shell(`
     ${renderRoleCard()}
     <section class="panel">
@@ -597,7 +990,7 @@ function renderLearningInstruction() {
           <p class="eyebrow">${MODE_LABELS[prompt.mode]}</p>
           <h2>复制 AI 学习指令</h2>
         </div>
-        <span class="pill">${goal.label}</span>
+        <span class="pill">${branchLabel}</span>
       </div>
       <p class="muted">这段内容是给 AI 老师看的，不需要逐句理解，复制后粘贴到 ChatGPT / Claude 中发送即可。</p>
       <textarea class="prompt-box" readonly>${prompt.text}</textarea>
@@ -637,8 +1030,9 @@ function renderSettlement() {
       <p class="eyebrow">成长证据已记录</p>
       <h2>${completeTitle}</h2>
       <div class="settlement">
-        <p>学习内容：${categoryLabel(session.category)}</p>
-        <p>学习目标：${goalById(session.goalId).label}</p>
+        <p>学习模块：${session.learningModule || categoryLabel(session.category)}</p>
+        <p>具体学科：${session.subject || "已记录"}</p>
+        <p>学习目标：${session.learningGoal || goalLabel(session.goalId)}</p>
         <p>实际时长：${session.durationMinutes} 分钟</p>
         <p>获得 EXP：+${session.expGained}</p>
       </div>
@@ -679,12 +1073,18 @@ function render() {
   const views = {
     welcome: renderWelcome,
     install_help: renderInstallHelp,
+    cloud_settings: renderCloudSettings,
     questionnaire: renderQuestionnaire,
     questionnaire_feedback: renderQuestionnaireFeedback,
     home: renderHome,
     identity_report: renderIdentityReport,
     category: renderCategorySelect,
-    goal: renderGoalSelect,
+    subject: renderSubjectSelect,
+    current_level: renderCurrentLevelSelect,
+    goal_branch: renderGoalBranchSelect,
+    training_mode: renderStatusAssessment,
+    status_assessment: renderStatusAssessment,
+    goal: renderCurrentLevelSelect,
     instruction_intro: renderInstructionIntro,
     learning_instruction: renderLearningInstruction,
     prompt: renderLearningInstruction,
@@ -718,6 +1118,17 @@ app.addEventListener("input", (event) => {
 
 app.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (event.target.id === "cloud-settings-form") {
+    const formData = new FormData(event.target);
+    saveCloudConfig({
+      supabaseUrl: formData.get("supabaseUrl"),
+      anonKey: formData.get("anonKey")
+    });
+    flushCloudQueue().finally(render);
+    render();
+    return;
+  }
+
   if (event.target.id !== "questionnaire-form") return;
   const user = { id: makeId("user"), createdAt: now(), hasCompletedQuestionnaire: true };
   const questionnaireResponse = {
@@ -736,8 +1147,20 @@ app.addEventListener("submit", (event) => {
     prompts: [],
     sessions: [],
     evidence: [],
+    selectedLearningModuleId: null,
     selectedCategory: null,
     selectedGoalId: null,
+    selectedSubjectId: null,
+    selectedCurrentLevelId: null,
+    selectedGoalBranchId: null,
+    selectedLearningGoalId: null,
+    selectedTrainingMode: null,
+    currentStatusId: null,
+    energyLevel: null,
+    fatigueLevel: null,
+    focusLevel: null,
+    motivationLevel: null,
+    plannedDuration: null,
     activePromptId: null,
     activeSessionId: null,
     lastCompletedSession: null,
@@ -747,6 +1170,13 @@ app.addEventListener("submit", (event) => {
   nextState = addEvidence(nextState, "questionnaire_completed", "完成问卷");
   nextState = addEvidence(nextState, "identity_created", "创建学习者身份");
   state = persistActiveProfile(nextState);
+  queueCloudEvent("questionnaire_completed", state, {
+    user,
+    questionnaireResponse,
+    parameters,
+    identity: state.identity,
+    evidence: state.evidence.slice(-2)
+  });
   saveState(state);
   render();
 });
@@ -758,6 +1188,18 @@ app.addEventListener("click", async (event) => {
 
   if (action === "start-questionnaire") commit({ screen: "questionnaire" });
   if (action === "install-help") commit({ screen: "install_help" });
+  if (action === "cloud-settings") commit({ screen: "cloud_settings" });
+  if (action === "flush-cloud") {
+    flushCloudQueue().finally(render);
+  }
+  if (action === "test-cloud") {
+    queueTestCloudEvent(state);
+    flushCloudQueue().finally(render);
+  }
+  if (action === "clear-cloud") {
+    clearCloudConfig();
+    render();
+  }
   if (action === "welcome") commit({ screen: "welcome" });
   if (action === "create-new-role") {
     commit({
@@ -767,25 +1209,117 @@ app.addEventListener("click", async (event) => {
   }
   if (action === "home") commit({ screen: "home" });
   if (action === "identity-report") commit({ screen: "identity_report" });
-  if (action === "select-category") commit({ screen: "category", selectedCategory: null, selectedGoalId: null });
-  if (action === "choose-category") {
-    commit({ selectedCategory: actionTarget.dataset.category, selectedGoalId: null, screen: "goal" });
-  }
-  if (action === "choose-goal") {
+  if (action === "select-category") {
     commit({
-      selectedGoalId: actionTarget.dataset.goal,
+      screen: "category",
+      selectedLearningModuleId: null,
+      selectedCategory: null,
+      selectedGoalId: null,
+      selectedSubjectId: null,
+      selectedCurrentLevelId: null,
+      selectedGoalBranchId: null,
+      selectedLearningGoalId: null,
+      selectedTrainingMode: null,
+      currentStatusId: null,
+      energyLevel: null,
+      fatigueLevel: null,
+      focusLevel: null,
+      motivationLevel: null,
+      plannedDuration: null
+    });
+  }
+  if (action === "choose-learning-module" || action === "choose-category") {
+    const moduleId = actionTarget.dataset.module || actionTarget.dataset.category;
+    commit({
+      selectedLearningModuleId: moduleId,
+      selectedCategory: moduleId,
+      selectedGoalId: null,
+      selectedSubjectId: null,
+      selectedCurrentLevelId: null,
+      selectedGoalBranchId: null,
+      selectedLearningGoalId: null,
+      selectedTrainingMode: null,
+      currentStatusId: null,
+      energyLevel: null,
+      fatigueLevel: null,
+      focusLevel: null,
+      motivationLevel: null,
+      plannedDuration: null,
+      screen: "subject"
+    });
+  }
+  if (action === "choose-subject") {
+    const isLanguage = state.selectedLearningModuleId === "language";
+    commit({
+      selectedSubjectId: actionTarget.dataset.subject,
+      selectedCurrentLevelId: null,
+      selectedGoalBranchId: null,
+      selectedLearningGoalId: null,
+      selectedTrainingMode: null,
+      currentStatusId: null,
+      selectedGoalId: null,
+      screen: isLanguage ? "goal_branch" : "current_level"
+    });
+  }
+  if (action === "choose-current-level") {
+    commit({
+      selectedCurrentLevelId: actionTarget.dataset.level,
+      selectedGoalBranchId: null,
+      selectedLearningGoalId: null,
+      selectedTrainingMode: null,
+      currentStatusId: null,
+      selectedGoalId: null,
+      screen: "goal_branch"
+    });
+  }
+  if (action === "choose-learning-goal" || action === "choose-goal-branch" || action === "choose-goal") {
+    const goalId = actionTarget.dataset.goal || actionTarget.dataset.branch;
+    const languageTarget = state.selectedLearningModuleId === "language" ? languageTargetById(goalId) : null;
+    commit({
+      selectedLearningGoalId: goalId,
+      selectedGoalBranchId: goalId,
+      selectedGoalId: goalId,
+      selectedSubjectId: languageTarget?.subjectId || state.selectedSubjectId,
+      selectedCurrentLevelId: languageTarget?.levelId || state.selectedCurrentLevelId,
+      selectedTrainingMode: null,
+      currentStatusId: null,
+      energyLevel: null,
+      fatigueLevel: null,
+      focusLevel: null,
+      motivationLevel: null,
+      plannedDuration: null,
+      screen: "status_assessment"
+    });
+  }
+  if (action === "choose-current-status") {
+    const status = statusById(actionTarget.dataset.status);
+    if (!status) return;
+    commit({
+      currentStatusId: status.id,
+      selectedTrainingMode: status.trainingMode,
+      plannedDuration: status.plannedDuration,
+      energyLevel: status.energyLevel,
+      fatigueLevel: status.fatigueLevel,
+      focusLevel: status.focusLevel,
+      motivationLevel: status.motivationLevel,
       copyNotice: "",
       showInstructionGuide: !state.hasSeenInstructionGuide,
       screen: "instruction_intro"
     });
   }
-  if (action === "goal-back") commit({ screen: "goal", selectedGoalId: null });
+  if (action === "module-back") commit({ screen: "subject", selectedSubjectId: null, selectedCurrentLevelId: null });
+  if (action === "level-back") commit({ screen: "current_level", selectedCurrentLevelId: null, selectedGoalBranchId: null, selectedLearningGoalId: null, selectedTrainingMode: null, currentStatusId: null });
+  if (action === "branch-back") commit({ screen: "goal_branch", selectedGoalBranchId: null, selectedLearningGoalId: null, selectedTrainingMode: null, currentStatusId: null });
+  if (action === "mode-back" || action === "goal-back") commit({ screen: "status_assessment" });
   if (action === "dismiss-instruction-guide") {
     commit({ hasSeenInstructionGuide: true, showInstructionGuide: false });
   }
   if (action === "generate-instruction") {
     updateState((nextState) =>
-      createPrompt({ ...nextState, showInstructionGuide: false, hasSeenInstructionGuide: true }, "light_start")
+      createPrompt(
+        { ...nextState, showInstructionGuide: false, hasSeenInstructionGuide: true },
+        nextState.selectedTrainingMode || "light_start"
+      )
     );
   }
   if (action === "copy-instruction" || action === "copy-prompt") {
@@ -799,6 +1333,23 @@ app.addEventListener("click", async (event) => {
       userId: state.user.id,
       category: prompt.category,
       goalId: prompt.goalId,
+      learningModule: prompt.learningModule,
+      learningModuleId: prompt.learningModuleId,
+      subject: prompt.subject,
+      subjectId: prompt.subjectId,
+      currentLevel: prompt.currentLevel,
+      currentLevelId: prompt.currentLevelId,
+      learningGoal: prompt.learningGoal,
+      learningGoalId: prompt.learningGoalId,
+      goalBranchId: prompt.goalBranchId,
+      levelEvidenceId: prompt.levelEvidenceId,
+      likelyEvidenceIds: prompt.likelyEvidenceIds || [],
+      currentStatus: prompt.currentStatus,
+      energyLevel: prompt.energyLevel,
+      fatigueLevel: prompt.fatigueLevel,
+      focusLevel: prompt.focusLevel,
+      plannedDuration: prompt.plannedDuration,
+      generatedPrompt: prompt.text,
       mode: prompt.mode,
       promptId: prompt.id,
       promptText: prompt.text,
@@ -809,6 +1360,7 @@ app.addEventListener("click", async (event) => {
       createdAt: now(),
       updatedAt: now()
     };
+    queueCloudEvent("session_started", state, { session });
     commit({ sessions: [...state.sessions, session], activeSessionId: session.id, copyNotice: "", screen: "active_session" });
   }
   if (action === "complete-session") {
@@ -847,6 +1399,10 @@ app.addEventListener("click", async (event) => {
           : item
       );
       const completedSession = updated.sessions.find((item) => item.id === session.id);
+      queueCloudEvent("session_completed", updated, {
+        session: completedSession,
+        evidence
+      });
       return {
         ...updated,
         activeSessionId: null,
@@ -858,7 +1414,9 @@ app.addEventListener("click", async (event) => {
   }
   if (action === "continue-learning") {
     const mode = state.lastCompletedSession.mode === "light_start" ? "standard" : "deep";
-    updateState((nextState) => createPrompt({ ...nextState, feedbackDraft: "" }, mode));
+    updateState((nextState) =>
+      createPrompt({ ...nextState, feedbackDraft: "", selectedTrainingMode: mode, plannedDuration: MODE_DURATION[mode] }, mode)
+    );
   }
   if (action === "settle-with-feedback") {
     const feedbackText = app.querySelector("[data-action='feedback-draft']")?.value.trim() || "";
@@ -878,6 +1436,12 @@ app.addEventListener("click", async (event) => {
       if (feedbackText) {
         updated = addEvidence(updated, "feedback_completed", "记录 AI 反馈", completedSession.id);
       }
+
+      queueCloudEvent("feedback_recorded", updated, {
+        session: updated.lastCompletedSession,
+        feedbackText,
+        evidence: feedbackText ? updated.evidence[updated.evidence.length - 1] : null
+      });
 
       return { ...updated, screen: "final_summary" };
     });

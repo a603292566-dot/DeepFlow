@@ -448,6 +448,11 @@ h3 {
   margin-top: 18px;
 }
 
+.choice-grid.compact {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  margin-top: 10px;
+}
+
 .choice {
   min-height: 88px;
   padding: 20px;
@@ -458,9 +463,32 @@ h3 {
   text-align: left;
 }
 
+.choice span {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .choice:hover {
   border-color: var(--primary);
   background: #e9f2ef;
+}
+
+.choice.selected {
+  border-color: var(--primary);
+  background: #dfeeea;
+  color: var(--primary-dark);
+}
+
+.status-group {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.status-group h3 {
+  margin-bottom: 0;
+  font-size: 18px;
 }
 
 .prompt-box {
@@ -480,6 +508,23 @@ h3 {
 
 .instruction-intro .actions-row {
   margin-top: 20px;
+}
+
+.learning-path-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 18px;
+}
+
+.learning-path-summary span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .notice {
@@ -609,6 +654,46 @@ h3 {
   padding-left: 20px;
   color: var(--muted);
   line-height: 1.8;
+}
+
+.settings-form,
+.sync-status {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.settings-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-form label span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.settings-form input {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 14px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.sync-status {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  background: #fffdf8;
+}
+
+.sync-status p {
+  margin-bottom: 0;
+  color: var(--muted);
 }
 
 @media (max-width: 760px) {

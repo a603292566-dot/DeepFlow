@@ -88,10 +88,35 @@ type LearnerIdentity = {
 }
 ```
 
-## 4. Learning Category and Goal
+## 4. Learning Path
 
 ```ts
 type LearningCategory = "language" | "math" | "programming"
+```
+
+```ts
+type LearningModule = {
+  id: LearningCategory
+  label: string
+}
+```
+
+```ts
+type LearningSubject = {
+  id: string
+  moduleId: LearningCategory
+  label: string
+  targetLanguage?: string
+}
+```
+
+```ts
+type CurrentLevel = {
+  id: string
+  moduleId: LearningCategory
+  label: string
+  zeroBase?: boolean
+}
 ```
 
 ```ts
@@ -103,25 +128,11 @@ type LearningGoal = {
 }
 ```
 
-```ts
-const LEARNING_GOALS: LearningGoal[] = [
-  { id: "german_c1", category: "language", label: "德语 C1" },
-  { id: "german_b2", category: "language", label: "德语 B2" },
-  { id: "english_c1", category: "language", label: "英语 C1" },
-  { id: "english_b2", category: "language", label: "英语 B2" },
-  { id: "french_intro", category: "language", label: "法语入门" },
+V1 学习路径采用：
 
-  { id: "calculus", category: "math", label: "微积分" },
-  { id: "linear_algebra", category: "math", label: "线性代数" },
-  { id: "probability", category: "math", label: "概率论" },
-  { id: "statistics_intro", category: "math", label: "统计学基础" },
+学习模块 → 具体学科 → 当前水平 → 学习目标 → 状态评估 → 生成 Prompt。
 
-  { id: "python_intro", category: "programming", label: "Python 入门" },
-  { id: "frontend_dev", category: "programming", label: "前端开发" },
-  { id: "ai_coding", category: "programming", label: "AI 辅助编程" },
-  { id: "product_code_logic", category: "programming", label: "产品代码理解" }
-]
-```
+DeepFlow MVP 不保存用户上传文件；学习材料由用户在外部 LLM 中上传或粘贴。
 
 ## 5. Session Mode and Learning Session
 
@@ -146,6 +157,19 @@ type LearningSession = {
   category: LearningCategory
   goalId: string
   mode: SessionMode
+
+  learningModule: string
+  subject: string
+  currentLevel: string
+  learningGoal: string
+  levelEvidenceId?: string
+  likelyEvidenceIds?: string[]
+  currentStatus: "状态不错" | "有点疲劳" | "很疲劳"
+  energyLevel: number
+  fatigueLevel: number
+  focusLevel: number
+  plannedDuration: string
+  generatedPrompt: string
 
   promptId: string
   promptText: string
@@ -183,6 +207,17 @@ type GeneratedPrompt = {
   userId: string
   category: LearningCategory
   goalId: string
+  learningModule: string
+  subject: string
+  currentLevel: string
+  learningGoal: string
+  levelEvidenceId?: string
+  likelyEvidenceIds?: string[]
+  currentStatus: "状态不错" | "有点疲劳" | "很疲劳"
+  energyLevel: number
+  fatigueLevel: number
+  focusLevel: number
+  plannedDuration: string
   mode: SessionMode
   identity: LearnerIdentityType
   text: string
@@ -197,6 +232,25 @@ type PromptGenerationContext = {
   parameters: IdentityParameters
   category: LearningCategory
   goal: LearningGoal
+  learningModule?: LearningModule
+  subject?: LearningSubject
+  currentLevel?: CurrentLevel
+  learningGoal?: LearningGoal
+  levelEvidence?: {
+    label: string
+    nextLevel?: string | null
+    nextLevelLabel: string
+    requiredCount: number
+    coreAbilities: string[]
+    requiredEvidence: Array<{ id: string; label: string }>
+  }
+  collectedEvidence?: Array<{ id: string; label: string }>
+  likelyEvidenceIds?: string[]
+  currentStatus?: string
+  energyLevel?: number
+  fatigueLevel?: number
+  focusLevel?: number
+  plannedDuration?: string
   mode: SessionMode
   currentState?: "fatigued" | "normal" | "good" | "restart"
   recentSessions?: LearningSession[]
