@@ -45,16 +45,20 @@ import {
   scoreQuestionnaire
 } from "./scoring.js";
 import {
-  diagnoseInvestmentLevel,
-  evaluateInvestmentUpgradeAnswer,
-  investmentDiagnosticQuestions,
+  consolidateInvestmentProfile,
+  createInvestmentProfile,
+  formatInvestmentSessionNumber,
+  investmentProfileSyncPayload,
+  investmentProgressionRecommendation,
   investmentLevelById,
   investmentTopicForMode,
   investmentTrackById,
   INVESTMENT_MODULE_ID,
   INVESTMENT_TRACKS,
-  investmentUpgradeQuestionForLevel,
-  shouldOfferInvestmentUpgradeQuestion
+  nextInvestmentSessionNumber,
+  progressInvestmentProfile,
+  shouldRecommendInvestmentProgression,
+  updateInvestmentProfileAfterSession
 } from "./investmentLearning.js";
 import { loadState, makeId, resetState, saveState } from "./storage.js";
 
@@ -77,11 +81,10 @@ const PROFILE_DATA_FIELDS = [
   "selectedGoalBranchId",
   "selectedLearningGoalId",
   "selectedTrainingMode",
+  "investmentProfile",
   "targetInvestmentTrack",
   "currentInvestmentLevel",
-  "investmentDiagnosticAnswers",
-  "investmentDiagnosticResult",
-  "investmentUpgradeResult",
+  "investmentProgressionDecision",
   "currentStatusId",
   "energyLevel",
   "fatigueLevel",
@@ -214,7 +217,7 @@ function currentLevel() {
 function currentLearningGoal() {
   const moduleId = state.selectedLearningModuleId || state.selectedCategory;
   if (moduleId === "language") return languageTargetById(state.selectedLearningGoalId || state.selectedGoalId);
-  if (moduleId === INVESTMENT_MODULE_ID) return investmentTrackById(state.targetInvestmentTrack);
+  if (moduleId === INVESTMENT_MODULE_ID) return investmentTrackById(state.investmentProfile?.targetTrack || state.targetInvestmentTrack);
   return learningGoalById(
     moduleId,
     state.selectedLearningGoalId || state.selectedGoalBranchId || state.selectedGoalId,
@@ -227,8 +230,9 @@ function createGoalFromSelection(nextState) {
   const moduleId = nextState.selectedLearningModuleId || nextState.selectedCategory;
   const module = learningModuleById(moduleId);
   if (moduleId === INVESTMENT_MODULE_ID) {
-    const track = investmentTrackById(nextState.targetInvestmentTrack);
-    const level = investmentLevelById(nextState.currentInvestmentLevel);
+    const profile = nextState.investmentProfile;
+    const track = investmentTrackById(profile?.targetTrack || nextState.targetInvestmentTrack);
+    const level = investmentLevelById(profile?.currentLevel || nextState.currentInvestmentLevel);
     return {
       id: track?.id || nextState.targetInvestmentTrack || "investment",
       category: INVESTMENT_MODULE_ID,
@@ -268,8 +272,9 @@ function createGoalFromSelection(nextState) {
 function createPrompt(nextState, mode) {
   const moduleId = nextState.selectedLearningModuleId || nextState.selectedCategory;
   const learningModule = learningModuleById(moduleId);
-  const investmentTrack = moduleId === INVESTMENT_MODULE_ID ? investmentTrackById(nextState.targetInvestmentTrack) : null;
-  const investmentLevel = moduleId === INVESTMENT_MODULE_ID ? investmentLevelById(nextState.currentInvestmentLevel) : null;
+  const investmentProfile = moduleId === INVESTMENT_MODULE_ID ? nextState.investmentProfile : null;
+  const investmentTrack = moduleId === INVESTMENT_MODULE_ID ? investmentTrackById(investmentProfile?.targetTrack || nextState.targetInvestmentTrack) : null;
+  const investmentLevel = moduleId === INVESTMENT_MODULE_ID ? investmentLevelById(investmentProfile?.currentLevel || nextState.currentInvestmentLevel) : null;
   const languageTarget = moduleId === "language" ? languageTargetById(nextState.selectedLearningGoalId || nextState.selectedGoalId) : null;
   const subject = languageTarget
     ? subjectById(moduleId, languageTarget.subjectId)
@@ -294,11 +299,9 @@ function createPrompt(nextState, mode) {
   const collectedEvidence = collectedLevelEvidence(nextState, levelEvidence);
   const likelyEvidenceIds = PROGRAMMING_GOAL_EVIDENCE_MAP[learningGoal?.id] || [];
   const generatedModulePlan = moduleId === "language" ? autoLanguageModulePlan(mode, languageTarget) : null;
-  const shouldIncludeInvestmentUpgradeQuestion = moduleId === INVESTMENT_MODULE_ID && shouldOfferInvestmentUpgradeQuestion({
-    sessions: nextState.sessions,
-    currentLevelId: nextState.currentInvestmentLevel,
-    latestSession: nextState.lastCompletedSession
-  });
+  const investmentSessionNumber = investmentProfile ? nextInvestmentSessionNumber(investmentProfile) : null;
+  const currentStageSessionNumber = investmentProfile ? (investmentProfile.currentStageSessionCount || 0) + 1 : null;
+  const investmentTopic = investmentLevel ? investmentTopicForMode(investmentLevel.id, mode, investmentProfile) : "";
   const context = {
     user: nextState.user,
     identity: nextState.identity,
@@ -311,13 +314,14 @@ function createPrompt(nextState, mode) {
     learningGoal,
     generatedModulePlan,
     autoSelectedModule: generatedModulePlan?.modules?.join(" + ") || "",
+    investmentProfile,
     investmentTrack,
     investmentTrackId: investmentTrack?.id,
     investmentLevel,
     currentInvestmentLevel: investmentLevel?.id,
-    investmentTopic: investmentLevel ? investmentTopicForMode(investmentLevel.id, mode) : "",
-    investmentUpgradeQuestion: investmentUpgradeQuestionForLevel(investmentLevel?.id),
-    shouldIncludeUpgradeQuestion: shouldIncludeInvestmentUpgradeQuestion,
+    investmentSessionNumber,
+    currentStageSessionNumber,
+    investmentTopic,
     levelEvidence,
     collectedEvidence,
     likelyEvidenceIds,
@@ -361,7 +365,9 @@ function createPrompt(nextState, mode) {
     targetInvestmentTrack: investmentTrack?.id,
     currentInvestmentLevel: investmentLevel?.id,
     investmentLevelLabel: investmentLevel?.label,
-    investmentTopic: context.investmentTopic,
+    investmentSessionNumber,
+    currentStageSessionNumber,
+    investmentTopic,
     levelEvidenceId: levelEvidence ? currentLevel?.id : null,
     likelyEvidenceIds,
     currentStatus: context.currentStatus,
@@ -378,7 +384,10 @@ function createPrompt(nextState, mode) {
 
   queueCloudEvent("prompt_generated", nextState, { prompt: generated });
   if (moduleId === INVESTMENT_MODULE_ID) {
-    queueCloudEvent("investment_prompt_generated", nextState, { prompt: generated });
+    queueCloudEvent("investment_prompt_generated", nextState, {
+      prompt: generated,
+      profile: investmentProfileSyncPayload(investmentProfile)
+    });
   }
 
   return {
@@ -811,59 +820,69 @@ function renderInvestmentGoalSelect() {
   `);
 }
 
-function renderInvestmentDiagnostic() {
-  const track = investmentTrackById(state.targetInvestmentTrack);
-  const questions = investmentDiagnosticQuestions(state.targetInvestmentTrack);
-  const answers = state.investmentDiagnosticAnswers || {};
-  const answeredCount = questions.filter((question) => answers[question.id]).length;
-  return shell(`
-    ${renderRoleCard()}
-    <section class="panel">
-      <p class="eyebrow">投资学习诊断</p>
-      <h2>${track?.label || "投资学习"}</h2>
-      <p class="muted">DeepFlow 会用几个小问题判断你当前更适合从哪里开始。这不是考试，只是为了生成更适合你的 AI 学习指令。</p>
-      <div class="diagnostic-list">
-        ${questions.map((question, index) => `
-          <article class="question-block">
-            <h3>${index + 1}. ${question.question}</h3>
-            <div class="choice-grid compact">
-              ${question.options.map((option) => `
-                <button class="choice ${answers[question.id] === option.id ? "selected" : ""}" data-action="choose-investment-answer" data-question="${question.id}" data-option="${option.id}">
-                  ${option.id}. ${option.text}
-                </button>
-              `).join("")}
-            </div>
-          </article>
-        `).join("")}
-      </div>
-      <div class="actions-row">
-        <button class="primary" data-action="submit-investment-diagnostic" ${answeredCount === questions.length ? "" : "disabled"}>查看当前起点</button>
-        <button class="ghost" data-action="investment-goal-back">返回目标方向</button>
-      </div>
-      <p class="muted">已完成 ${answeredCount} / ${questions.length}</p>
-    </section>
-  `);
-}
-
 function renderInvestmentFeedback() {
-  const track = investmentTrackById(state.targetInvestmentTrack);
-  const level = investmentLevelById(state.currentInvestmentLevel);
-  const result = state.investmentDiagnosticResult;
+  const profile = state.investmentProfile;
+  const track = investmentTrackById(profile?.targetTrack || state.targetInvestmentTrack);
+  const level = investmentLevelById(profile?.currentLevel || state.currentInvestmentLevel);
   return shell(`
     ${renderRoleCard()}
     <section class="panel">
-      <p class="eyebrow">当前起点已生成</p>
+      <p class="eyebrow">投资学习档案已创建</p>
       <h2>${level?.publicLabel || "投资入门"}</h2>
       <div class="settlement">
         <p>目标方向：${track?.label || "投资学习"}</p>
-        <p>当前适合起点：${level?.publicLabel || "投资入门"}</p>
-        <p>诊断完成：${result ? `${result.correctCount} / ${result.totalQuestions} 个关键判断已记录` : "已记录"}</p>
+        <p>当前阶段：${level?.label || "L0 投资基础概念"}</p>
+        <p>下一次：${formatInvestmentSessionNumber(nextInvestmentSessionNumber(profile))}</p>
       </div>
       <p>${level?.summary || "投资知识正在建立，DeepFlow 会从低负荷任务开始。"}</p>
       <p class="muted">本模块只做投资知识教育和判断框架训练，不提供买卖建议、个股推荐或收益承诺。</p>
       <div class="actions-row">
         <button class="primary" data-action="generate-investment-instruction">生成 AI 学习指令</button>
-        <button class="ghost" data-action="investment-diagnostic-back">返回诊断题</button>
+        <button class="ghost" data-action="investment-goal-back">调整目标</button>
+      </div>
+    </section>
+  `);
+}
+
+function renderInvestmentContinue() {
+  const profile = state.investmentProfile;
+  const track = investmentTrackById(profile?.targetTrack);
+  const level = investmentLevelById(profile?.currentLevel);
+  return shell(`
+    ${renderRoleCard()}
+    <section class="panel">
+      <p class="eyebrow">投资学习</p>
+      <h2>继续投资学习</h2>
+      <div class="settlement">
+        <p>当前方向：${track?.label || "投资学习"}</p>
+        <p>当前阶段：${level?.label || "L0 投资基础概念"}</p>
+        <p>累计完成：${profile?.sessionCount || 0} 次</p>
+        <p>下一次：${formatInvestmentSessionNumber(nextInvestmentSessionNumber(profile))}</p>
+        <p>最近主题：${profile?.lastTopic || "暂无，准备开始第一步"}</p>
+      </div>
+      <p>${level?.summary || "投资知识正在建立，DeepFlow 会继续从低负荷任务开始。"}</p>
+      <div class="actions-row">
+        <button class="primary" data-action="generate-investment-instruction">继续学习</button>
+        <button class="ghost" data-action="investment-adjust-goal">调整目标</button>
+        <button class="ghost" data-action="reset-investment-profile">重置投资学习档案</button>
+      </div>
+    </section>
+  `);
+}
+
+function renderInvestmentProgression() {
+  const profile = state.investmentProfile;
+  const recommendation = investmentProgressionRecommendation(profile);
+  return shell(`
+    ${renderRoleCard()}
+    <section class="panel">
+      <p class="eyebrow">阶段推进建议</p>
+      <h2>当前阶段已经形成多次学习证据</h2>
+      <p>你已经完成了当前阶段的多次学习。下一阶段可以开始学习：${recommendation?.nextTopic || "下一阶段内容"}。</p>
+      <p class="muted">这只是基于学习次数形成的建议，你可以按照自己的节奏选择进入下一阶段，或继续巩固当前阶段。</p>
+      <div class="actions-row">
+        <button class="primary" data-action="progress-investment-level">进入下一阶段</button>
+        <button class="secondary" data-action="consolidate-investment-level">继续巩固当前阶段</button>
       </div>
     </section>
   `);
@@ -1061,15 +1080,6 @@ function renderSettlement() {
   const session = state.lastCompletedSession;
   const completeTitle = session.mode === "light_start" ? "轻启动完成" : `${MODE_LABELS[session.mode]}完成`;
   const canGoDeeper = session.mode !== "deep";
-  const upgradeQuestion =
-    session.learningModuleId === INVESTMENT_MODULE_ID &&
-    shouldOfferInvestmentUpgradeQuestion({
-      sessions: state.sessions,
-      currentLevelId: session.currentInvestmentLevel,
-      latestSession: session
-    })
-      ? investmentUpgradeQuestionForLevel(session.currentInvestmentLevel)
-      : null;
   return shell(`
     ${renderRoleCard()}
     <section class="panel">
@@ -1091,21 +1101,6 @@ function renderSettlement() {
           <button class="ghost" data-action="finish-learning">跳过并结算</button>
         </div>
       </section>
-      ${upgradeQuestion ? `
-        <section class="feedback-capture">
-          <h3>是否尝试升级问题？</h3>
-          <p class="muted">这不是考试，只是帮助判断下一阶段是否已经适合开启。</p>
-          <p>${upgradeQuestion.question}</p>
-          <div class="choice-grid compact">
-            ${upgradeQuestion.options.map((option) => `
-              <button class="choice" data-action="answer-investment-upgrade" data-level="${upgradeQuestion.fromLevel}" data-option="${option.id}">
-                ${option.id}. ${option.text}
-              </button>
-            `).join("")}
-          </div>
-          ${state.investmentUpgradeResult ? `<p class="notice">${state.investmentUpgradeResult.message}</p>` : ""}
-        </section>
-      ` : ""}
       <h3>是否继续深化？</h3>
       <div class="actions-row">
         ${canGoDeeper ? `<button class="primary" data-action="continue-learning">继续深化</button>` : ""}
@@ -1141,8 +1136,9 @@ function render() {
     identity_report: renderIdentityReport,
     category: renderCategorySelect,
     investment_goal: renderInvestmentGoalSelect,
-    investment_diagnostic: renderInvestmentDiagnostic,
     investment_feedback: renderInvestmentFeedback,
+    investment_continue: renderInvestmentContinue,
+    investment_progression: renderInvestmentProgression,
     subject: renderSubjectSelect,
     current_level: renderCurrentLevelSelect,
     goal_branch: renderGoalBranchSelect,
@@ -1218,11 +1214,10 @@ app.addEventListener("submit", (event) => {
     selectedCurrentLevelId: null,
     selectedGoalBranchId: null,
     selectedLearningGoalId: null,
+    investmentProfile: null,
     targetInvestmentTrack: null,
     currentInvestmentLevel: null,
-    investmentDiagnosticAnswers: null,
-    investmentDiagnosticResult: null,
-    investmentUpgradeResult: null,
+    investmentProgressionDecision: null,
     selectedTrainingMode: null,
     currentStatusId: null,
     energyLevel: null,
@@ -1300,9 +1295,7 @@ app.addEventListener("click", async (event) => {
       selectedLearningGoalId: null,
       targetInvestmentTrack: null,
       currentInvestmentLevel: null,
-      investmentDiagnosticAnswers: null,
-      investmentDiagnosticResult: null,
-      investmentUpgradeResult: null,
+      investmentProgressionDecision: null,
       selectedTrainingMode: null,
       currentStatusId: null,
       energyLevel: null,
@@ -1322,11 +1315,9 @@ app.addEventListener("click", async (event) => {
       selectedCurrentLevelId: null,
       selectedGoalBranchId: null,
       selectedLearningGoalId: null,
-      targetInvestmentTrack: null,
-      currentInvestmentLevel: null,
-      investmentDiagnosticAnswers: null,
-      investmentDiagnosticResult: null,
-      investmentUpgradeResult: null,
+      targetInvestmentTrack: moduleId === INVESTMENT_MODULE_ID ? state.investmentProfile?.targetTrack || null : null,
+      currentInvestmentLevel: moduleId === INVESTMENT_MODULE_ID ? state.investmentProfile?.currentLevel || null : null,
+      investmentProgressionDecision: null,
       selectedTrainingMode: null,
       currentStatusId: null,
       energyLevel: null,
@@ -1334,69 +1325,64 @@ app.addEventListener("click", async (event) => {
       focusLevel: null,
       motivationLevel: null,
       plannedDuration: null,
-      screen: moduleId === INVESTMENT_MODULE_ID ? "investment_goal" : "subject"
+      screen: moduleId === INVESTMENT_MODULE_ID && state.investmentProfile?.hasStarted ? "investment_continue" : moduleId === INVESTMENT_MODULE_ID ? "investment_goal" : "subject"
     });
   }
   if (action === "choose-investment-track") {
     const trackId = actionTarget.dataset.track;
-    commit({
+    const profile = createInvestmentProfile(trackId, now());
+    let nextState = {
+      ...state,
       selectedLearningModuleId: INVESTMENT_MODULE_ID,
       selectedCategory: INVESTMENT_MODULE_ID,
       selectedSubjectId: "investment_knowledge",
       selectedGoalId: trackId,
       selectedGoalBranchId: trackId,
       selectedLearningGoalId: trackId,
+      investmentProfile: profile,
       targetInvestmentTrack: trackId,
-      currentInvestmentLevel: null,
-      investmentDiagnosticAnswers: {},
-      investmentDiagnosticResult: null,
-      investmentUpgradeResult: null,
-      selectedTrainingMode: null,
-      currentStatusId: null,
-      plannedDuration: null,
-      screen: "investment_diagnostic"
+      currentInvestmentLevel: profile.currentLevel,
+      selectedCurrentLevelId: `investment_${profile.currentLevel.toLowerCase()}`,
+      investmentProgressionDecision: null,
+      selectedTrainingMode: "light_start",
+      currentStatusId: "tired",
+      energyLevel: 5,
+      fatigueLevel: 6,
+      focusLevel: 5,
+      motivationLevel: 6,
+      plannedDuration: 8,
+      screen: "investment_feedback"
+    };
+    nextState = addGrowthEvidence(nextState, {
+      type: "investment_profile_created",
+      label: "创建投资学习档案",
+      evidenceId: makeId("evidence"),
+      createdAt: now()
     });
-    queueCloudEvent("investment_goal_selected", state, { trackId });
+    state = persistActiveProfile(nextState);
+    queueCloudEvent("investment_goal_selected", state, investmentProfileSyncPayload(profile));
+    queueCloudEvent("investment_profile_created", state, investmentProfileSyncPayload(profile));
+    saveState(state);
+    render();
   }
-  if (action === "choose-investment-answer") {
-    const questionId = actionTarget.dataset.question;
-    const optionId = actionTarget.dataset.option;
+  if (action === "investment-goal-back" || action === "investment-adjust-goal") {
     commit({
-      investmentDiagnosticAnswers: {
-        ...(state.investmentDiagnosticAnswers || {}),
-        [questionId]: optionId
-      }
+      screen: "investment_goal",
+      investmentProfile: null,
+      targetInvestmentTrack: null,
+      currentInvestmentLevel: null,
+      investmentProgressionDecision: null
     });
   }
-  if (action === "submit-investment-diagnostic") {
-    const result = diagnoseInvestmentLevel(state.targetInvestmentTrack, state.investmentDiagnosticAnswers || {});
-    updateState((nextState) => {
-      let updated = {
-        ...nextState,
-        investmentDiagnosticResult: result,
-        currentInvestmentLevel: result.currentLevelId,
-        selectedCurrentLevelId: `investment_${result.currentLevelId.toLowerCase()}`,
-        selectedTrainingMode: "light_start",
-        currentStatusId: "tired",
-        energyLevel: 5,
-        fatigueLevel: 6,
-        focusLevel: 5,
-        motivationLevel: 6,
-        plannedDuration: 8,
-        screen: "investment_feedback"
-      };
-      updated = addGrowthEvidence(updated, {
-        type: "investment_level_diagnosed",
-        label: "完成投资学习起点诊断",
-        evidenceId: makeId("evidence"),
-        createdAt: now()
-      });
-      queueCloudEvent("investment_diagnostic_completed", updated, { result });
-      return updated;
+  if (action === "reset-investment-profile") {
+    commit({
+      screen: "investment_goal",
+      investmentProfile: null,
+      targetInvestmentTrack: null,
+      currentInvestmentLevel: null,
+      investmentProgressionDecision: null
     });
   }
-  if (action === "investment-goal-back") commit({ screen: "investment_goal", targetInvestmentTrack: null, investmentDiagnosticAnswers: null });
-  if (action === "investment-diagnostic-back") commit({ screen: "investment_diagnostic" });
   if (action === "generate-investment-instruction") {
     updateState((nextState) =>
       createPrompt(
@@ -1507,6 +1493,8 @@ app.addEventListener("click", async (event) => {
       targetInvestmentTrack: prompt.targetInvestmentTrack,
       currentInvestmentLevel: prompt.currentInvestmentLevel,
       investmentLevelLabel: prompt.investmentLevelLabel,
+      investmentSessionNumber: prompt.investmentSessionNumber,
+      currentStageSessionNumber: prompt.currentStageSessionNumber,
       investmentTopic: prompt.investmentTopic,
       levelEvidenceId: prompt.levelEvidenceId,
       likelyEvidenceIds: prompt.likelyEvidenceIds || [],
@@ -1528,7 +1516,10 @@ app.addEventListener("click", async (event) => {
     };
     queueCloudEvent("session_started", state, { session });
     if (session.learningModuleId === INVESTMENT_MODULE_ID) {
-      queueCloudEvent("investment_session_started", state, { session });
+      queueCloudEvent("investment_session_started", state, {
+        session,
+        profile: investmentProfileSyncPayload(state.investmentProfile)
+      });
     }
     commit({ sessions: [...state.sessions, session], activeSessionId: session.id, copyNotice: "", screen: "active_session" });
   }
@@ -1585,9 +1576,36 @@ app.addEventListener("click", async (event) => {
         evidence
       });
       if (isInvestmentSession) {
+        const nextProfile = updateInvestmentProfileAfterSession(updated.investmentProfile, {
+          sessionNumber: session.investmentSessionNumber,
+          topic: session.investmentTopic,
+          completedAt: endTime
+        });
+        updated = {
+          ...updated,
+          investmentProfile: nextProfile,
+          targetInvestmentTrack: nextProfile?.targetTrack,
+          currentInvestmentLevel: nextProfile?.currentLevel,
+          selectedCurrentLevelId: nextProfile?.currentLevel ? `investment_${nextProfile.currentLevel.toLowerCase()}` : updated.selectedCurrentLevelId
+        };
         queueCloudEvent("investment_session_completed", updated, {
           session: completedSession,
-          evidence
+          evidence,
+          profile: investmentProfileSyncPayload(updated.investmentProfile)
+        });
+      }
+      const shouldShowProgression = isInvestmentSession && shouldRecommendInvestmentProgression(updated.investmentProfile);
+      if (shouldShowProgression) {
+        updated = addGrowthEvidence(updated, {
+          type: "investment_level_progression_recommended",
+          label: "投资学习阶段推进建议已生成",
+          sessionId: session.id,
+          evidenceId: makeId("evidence"),
+          createdAt: now()
+        });
+        queueCloudEvent("investment_level_progression_recommended", updated, {
+          profile: investmentProfileSyncPayload(updated.investmentProfile),
+          recommendation: investmentProgressionRecommendation(updated.investmentProfile)
         });
       }
       return {
@@ -1595,7 +1613,7 @@ app.addEventListener("click", async (event) => {
         activeSessionId: null,
         feedbackDraft: "",
         lastCompletedSession: completedSession,
-        screen: "settlement"
+        screen: shouldShowProgression ? "investment_progression" : "settlement"
       };
     });
   }
@@ -1639,40 +1657,51 @@ app.addEventListener("click", async (event) => {
       return { ...updated, screen: "final_summary" };
     });
   }
-  if (action === "answer-investment-upgrade") {
-    const levelId = actionTarget.dataset.level;
-    const optionId = actionTarget.dataset.option;
-    const result = evaluateInvestmentUpgradeAnswer(levelId, optionId);
+  if (action === "progress-investment-level") {
     updateState((nextState) => {
-      let updated = addGrowthEvidence(nextState, {
-        type: "investment_upgrade_question_answered",
-        label: "完成投资学习升级问题",
+      const progressedProfile = progressInvestmentProfile(nextState.investmentProfile, now());
+      let updated = {
+        ...nextState,
+        investmentProfile: progressedProfile,
+        targetInvestmentTrack: progressedProfile?.targetTrack,
+        currentInvestmentLevel: progressedProfile?.currentLevel,
+        selectedCurrentLevelId: progressedProfile?.currentLevel ? `investment_${progressedProfile.currentLevel.toLowerCase()}` : nextState.selectedCurrentLevelId,
+        investmentProgressionDecision: "progressed"
+      };
+      updated = addGrowthEvidence(updated, {
+        type: "investment_level_progressed",
+        label: "投资学习进入下一阶段",
         sessionId: nextState.lastCompletedSession?.id,
         evidenceId: makeId("evidence"),
         createdAt: now()
       });
-      if (result.isCorrect) {
-        updated = {
-          ...updated,
-          currentInvestmentLevel: result.toLevel || updated.currentInvestmentLevel
-        };
-        updated = addGrowthEvidence(updated, {
-          type: "investment_level_up_recommended",
-          label: "投资学习进入下一阶段建议已形成",
-          sessionId: nextState.lastCompletedSession?.id,
-          evidenceId: makeId("evidence"),
-          createdAt: now()
-        });
-      }
-      const latestEvidence = updated.evidence.slice(-2);
-      queueCloudEvent("investment_upgrade_question_answered", updated, { result, evidence: latestEvidence });
-      if (result.isCorrect) {
-        queueCloudEvent("investment_level_up_recommended", updated, { result, evidence: latestEvidence });
-      }
-      return {
-        ...updated,
-        investmentUpgradeResult: result
+      queueCloudEvent("investment_level_progressed", updated, {
+        profile: investmentProfileSyncPayload(updated.investmentProfile),
+        evidence: updated.evidence[updated.evidence.length - 1]
+      });
+      return { ...updated, screen: "investment_continue" };
+    });
+  }
+  if (action === "consolidate-investment-level") {
+    updateState((nextState) => {
+      const consolidatedProfile = consolidateInvestmentProfile(nextState.investmentProfile, now());
+      let updated = {
+        ...nextState,
+        investmentProfile: consolidatedProfile,
+        investmentProgressionDecision: "consolidated"
       };
+      updated = addGrowthEvidence(updated, {
+        type: "investment_level_consolidated",
+        label: "投资学习继续巩固当前阶段",
+        sessionId: nextState.lastCompletedSession?.id,
+        evidenceId: makeId("evidence"),
+        createdAt: now()
+      });
+      queueCloudEvent("investment_level_consolidated", updated, {
+        profile: investmentProfileSyncPayload(updated.investmentProfile),
+        evidence: updated.evidence[updated.evidence.length - 1]
+      });
+      return { ...updated, screen: "investment_continue" };
     });
   }
   if (action === "finish-learning") commit({ feedbackDraft: "", screen: "final_summary" });

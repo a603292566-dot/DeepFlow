@@ -86,18 +86,32 @@ Use this checklist before each public test deployment.
   - 理解市场涨跌
   - 看懂公司与投资决策
 - Choose one target direction.
-- Confirm 3-5 diagnostic questions appear.
-- Answer all diagnostic questions.
-- Confirm the current starting point feedback page appears.
+- Confirm no diagnostic questions appear.
+- Confirm the investment profile starting point page appears.
 - Confirm the feedback page uses low-pressure language and does not use failure-style labels.
 - Generate the AI learning instruction.
+- Confirm the instruction includes `投资学习 Session 001`.
 - Confirm the instruction says it is only for investment knowledge education.
 - Confirm the instruction does not include concrete buy/sell advice, individual stock recommendations, product recommendations, allocation plans, or return promises.
 - Confirm the instruction includes a risk reminder.
+- Confirm the instruction uses an open-ended question, not a forced choice question.
+- Generate an interest-rate-related investment instruction.
+- Confirm it distinguishes discount rate and discount factor / present value factor.
+- Confirm it uses conditional wording such as `其他条件不变`.
+- Confirm it includes real-market interference factors such as risk appetite, fund flow, liquidity, positioning, or policy expectations.
+- Generate a `看懂公司与投资决策` instruction and confirm it includes financial statement learning.
+- Confirm company analysis includes income statement, balance sheet, cash flow statement, revenue, profit, cash flow, margins, ROE, debt, solvency, operating cash flow, earnings quality, business model, and valuation.
+- Generate a `理解市场涨跌` instruction and confirm it can include technical analysis as an auxiliary observation topic.
+- Confirm K-line and technical indicators are described as observation tools, not deterministic buy/sell signals.
 - Start the timer.
 - Complete light start and confirm EXP settlement.
-- Continue to standard/deep or complete enough sessions to trigger an upgrade question.
-- Answer the upgrade question and confirm it gives growth-language feedback.
+- Reopen `投资学习`.
+- Confirm the continue page appears directly.
+- Confirm the next instruction uses `投资学习 Session 002`.
+- Complete enough sessions to show the next-stage recommendation.
+- Choose `继续巩固当前阶段` and confirm the current stage stays the same.
+- Later choose `进入下一阶段` and confirm the current stage updates.
+- Confirm no forced question flow appears.
 - Confirm language, math, and programming flows still work.
 
 ## 8. AI Learning Instruction

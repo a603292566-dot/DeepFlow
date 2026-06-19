@@ -575,12 +575,14 @@ export const BASE_EXP = {
   systematization_completed: 90,
   project_progress_completed: 90,
   model_built: 120,
-  investment_level_diagnosed: 50,
+  investment_profile_created: 50,
+  investment_learning_continued: 20,
   investment_light_start_completed: 30,
   investment_concept_understood: 40,
   investment_structured_explanation_completed: 60,
-  investment_upgrade_question_answered: 80,
-  investment_level_up_recommended: 120,
+  investment_level_progression_recommended: 50,
+  investment_level_progressed: 120,
+  investment_level_consolidated: 40,
   investment_case_analysis_completed: 100,
   investment_risk_awareness_completed: 40
 };

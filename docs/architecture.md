@@ -68,13 +68,14 @@ Owns investment learning configuration and pure logic:
 
 - three public tracks: beginner, market logic, company decision
 - internal investment levels L0-L6
-- diagnostic questions
-- diagnostic scoring
-- upgrade questions
-- upgrade answer evaluation
+- learning profile creation
+- session numbering
+- stage session counting
+- stage progression recommendation
+- profile progression or consolidation
 - investment topic selection by mode
 
-The UI should not expose L0-L6 as the first choice. It should show the three public tracks and let this module resolve the internal level.
+The UI should not expose L0-L6 as a required first choice. It should show the three public tracks, create an `investmentProfile`, and continue from that profile on later visits. The investment module no longer uses single-choice diagnostics or upgrade questions.
 
 ### `src/investmentPromptEngine.js`
 
@@ -83,7 +84,8 @@ Owns investment learning prompt generation:
 - investment knowledge education boundaries
 - risk reminders
 - mode-specific task shape
-- optional upgrade question section
+- session number and continuous learning context
+- open-ended learning question
 - DeepFlow investment feedback format
 
 This module must not produce concrete buy/sell advice, individual stock recommendations, product recommendations, allocation plans, or return promises.
@@ -123,7 +125,7 @@ Do not put service role keys or private database secrets in this app.
 3. `src/app.js` saves identity and shows feedback.
 4. User starts a learning session.
 5. `src/learningPath.js` resolves module, subject, level, goal, and language auto module plan.
-6. For investment learning, `src/investmentLearning.js` resolves track, diagnostic level, topic, and optional upgrade question.
+6. For investment learning, `src/investmentLearning.js` resolves profile, track, current level, session number, and topic.
 7. `src/promptEngine.js` generates the AI learning instruction.
 8. If the module is investment, `src/investmentPromptEngine.js` generates the investment-specific instruction.
 9. User copies the instruction to an external LLM.
@@ -140,12 +142,30 @@ Do not put service role keys or private database secrets in this app.
    - 投资入门
    - 理解市场涨跌
    - 看懂公司与投资决策
-3. User answers 3-5 diagnostic questions.
-4. `src/investmentLearning.js` maps answers to an internal level from L0-L6.
+3. `src/investmentLearning.js` creates an `investmentProfile`.
+4. The selected track sets the initial level:
+   - beginner -> L0
+   - market_logic -> L2
+   - company_decision -> L4
 5. User sees a low-pressure starting point feedback page.
-6. DeepFlow generates a light-start AI learning instruction.
+6. DeepFlow generates a numbered light-start AI learning instruction, such as `投资学习 Session 001`.
 7. The session uses the existing timer, settlement, EXP, role card, and cloud sync paths.
-8. Upgrade questions appear only when the current level has enough evidence or after standard/deep learning.
+8. Completion updates `sessionCount`, `currentStageSessionCount`, `lastSessionNumber`, and `lastTopic`.
+9. Later visits open the investment continue page directly.
+10. When the current stage has enough completed sessions, DeepFlow recommends the next stage. The user can enter the next stage or continue consolidating the current one.
+
+## Investment Theory Boundaries
+
+DeepFlow investment learning uses a multi-model explanation framework. It should train users to compare mechanisms, not memorize one fixed formula.
+
+- Market explanations must separate classic theory relationships from real market interference.
+- Interest rate, bond, and stock explanations must distinguish market interest rate, required return, discount rate, discount factor / present value factor, bond price, bond yield to maturity, and stock valuation.
+- Interest rate and valuation explanations must clarify that discount rate and discount factor move in opposite directions.
+- Bond and stock relationships should use conditional language such as "all else equal" and must not be framed as permanent rules.
+- Explanations should include multiple models when relevant: fundamental / discount model, efficient market / information reflection, Keynesian beauty contest, behavioral finance, liquidity / fund flow, reflexivity, and market structure.
+- Financial statements are a core part of company analysis. The company decision track should cover income statement, balance sheet, cash flow statement, revenue, profit, cash flow, margins, ROE, debt, solvency, operating cash flow, earnings quality, business model, and valuation.
+- K-line charts and technical indicators are auxiliary observation tools. They can help describe behavior, sentiment, trend, momentum, and crowding, but they are not a deterministic prediction system.
+- Technical analysis must not be converted into buy/sell signals inside DeepFlow prompts.
 
 ## Current Maintenance Risks
 
