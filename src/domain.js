@@ -55,7 +55,8 @@ export const MODE_DURATION = {
 export const LEARNING_MODULES = [
   { id: "language", label: "语言学习" },
   { id: "programming", label: "编程学习" },
-  { id: "math", label: "数学学习" }
+  { id: "math", label: "数学学习" },
+  { id: "investment", label: "投资学习" }
 ];
 
 export const MODULE_SUBJECTS = {
@@ -71,6 +72,9 @@ export const MODULE_SUBJECTS = {
     { id: "math_basics", label: "数学基础" },
     { id: "high_school_math", label: "高中数学" },
     { id: "college_math", label: "大学数学" }
+  ],
+  investment: [
+    { id: "investment_knowledge", label: "投资知识学习" }
   ]
 };
 
@@ -98,6 +102,15 @@ export const MODULE_LEVELS = {
     { id: "math_m2", label: "M2 高中基础" },
     { id: "math_m3", label: "M3 大学基础" },
     { id: "math_m4", label: "M4 专业进阶" }
+  ],
+  investment: [
+    { id: "investment_l0", label: "L0 完全小白", zeroBase: true },
+    { id: "investment_l1", label: "L1 市场入门" },
+    { id: "investment_l2", label: "L2 涨跌因素理解" },
+    { id: "investment_l3", label: "L3 资产定价入门" },
+    { id: "investment_l4", label: "L4 财报与基本面" },
+    { id: "investment_l5", label: "L5 估值与投资决策" },
+    { id: "investment_l6", label: "L6 组合管理与投资系统" }
   ]
 };
 
@@ -125,6 +138,11 @@ export const MODULE_GOALS = {
     { id: "math_practice", label: "习题训练" },
     { id: "math_error_review", label: "错题分析" },
     { id: "math_application", label: "应用训练" }
+  ],
+  investment: [
+    { id: "investment_beginner", label: "投资入门" },
+    { id: "investment_market_logic", label: "理解市场涨跌" },
+    { id: "investment_company_decision", label: "看懂公司与投资决策" }
   ]
 };
 
@@ -556,7 +574,15 @@ export const BASE_EXP = {
   knowledge_transfer_completed: 80,
   systematization_completed: 90,
   project_progress_completed: 90,
-  model_built: 120
+  model_built: 120,
+  investment_level_diagnosed: 50,
+  investment_light_start_completed: 30,
+  investment_concept_understood: 40,
+  investment_structured_explanation_completed: 60,
+  investment_upgrade_question_answered: 80,
+  investment_level_up_recommended: 120,
+  investment_case_analysis_completed: 100,
+  investment_risk_awareness_completed: 40
 };
 
 export const IDENTITY_BONUS = {

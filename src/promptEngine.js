@@ -1,4 +1,5 @@
 import { IDENTITY_LABELS, LEARNING_GOALS, MODE_LABELS } from "./domain.js";
+import { generateInvestmentPrompt } from "./investmentPromptEngine.js";
 
 const ZERO_BASE_LEVEL_IDS = new Set(["language_a1", "programming_l0", "math_m0"]);
 
@@ -22,6 +23,7 @@ export function defaultLanguageProfile(userId, goal) {
 
 export function generatePrompt(context) {
   if (context.learningModule?.id === "language" || context.category === "language") return generateLanguagePrompt(context);
+  if (context.learningModule?.id === "investment" || context.category === "investment") return generateInvestmentPrompt(context);
 
   const mainIdentity = IDENTITY_LABELS[context.identity.mainIdentity] || "学习者";
   const secondaryIdentity = IDENTITY_LABELS[context.identity.secondaryIdentity] || "正在形成";

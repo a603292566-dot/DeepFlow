@@ -50,6 +50,10 @@ const sources = [
   "src/identityReportTemplates.js",
   "src/scoring.js",
   "src/storage.js",
+  "src/learningPath.js",
+  "src/growthEvidence.js",
+  "src/investmentLearning.js",
+  "src/investmentPromptEngine.js",
   "src/promptEngine.js",
   "src/cloudSync.js",
   "src/app.js"
