@@ -1,4 +1,4 @@
-const CACHE_NAME = "deepflow-shell-v2";
+const CACHE_NAME = "deepflow-shell-v3";
 
 const APP_SHELL = [
   "/",
@@ -9,7 +9,12 @@ const APP_SHELL = [
   "/src/app.js",
   "/src/cloudSync.js",
   "/src/domain.js",
+  "/src/growthEvidence.js",
   "/src/identityReportTemplates.js",
+  "/src/investmentLearning.js",
+  "/src/investmentPromptEngine.js",
+  "/src/learningCalendar.js",
+  "/src/learningPath.js",
   "/src/promptEngine.js",
   "/src/scoring.js",
   "/src/storage.js",
@@ -43,6 +48,26 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate") {
     event.respondWith(fetch(request).catch(() => caches.match("/index.html")));
+    return;
+  }
+
+  if (
+    url.pathname === "/env-config.js" ||
+    url.pathname === "/src/styles.css" ||
+    url.pathname === "/manifest.webmanifest" ||
+    url.pathname.startsWith("/src/")
+  ) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request))
+    );
     return;
   }
 
