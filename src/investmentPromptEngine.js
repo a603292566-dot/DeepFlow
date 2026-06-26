@@ -35,6 +35,11 @@ export function generateInvestmentPrompt(context) {
 * 当前阶段学习次数：第 ${stageSessionNumber} 次
 * 累计投资学习次数：第 ${sessionNumber} 次
 * 最近主题：${profile.lastTopic || "暂无，准备开始第一步"}
+* 本次学习日期：${context.currentDate || "本地日期已记录"}
+${context.lastLearningDate ? `* 最近一次学习日期：${context.lastLearningDate}` : ""}
+${Number.isFinite(context.currentStreak) ? `* 当前连续学习：${context.currentStreak} 天` : ""}
+${Number.isFinite(context.todaySessionCount) ? `* 今日已完成学习：${context.todaySessionCount} 次` : ""}
+${Number.isFinite(context.monthlySessionCount) ? `* 本月已完成学习：${context.monthlySessionCount} 次` : ""}
 
 【本次启动状态】
 * 当前训练模式：${mode}

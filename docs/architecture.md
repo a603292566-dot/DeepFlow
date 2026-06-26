@@ -99,6 +99,19 @@ Owns growth evidence mutations:
 - apply EXP to the role card
 - collect programming level evidence
 
+### `src/learningCalendar.js`
+
+Owns automatic learning calendar logic:
+
+- create one calendar entry when a learning session is completed
+- group completed sessions by local date
+- allow multiple completed sessions on the same day
+- avoid duplicate entries by `sessionId`
+- calculate current streak, total learning days, monthly sessions, monthly minutes, and monthly EXP
+- create month-view data for the calendar page
+
+The calendar is not a manual check-in system. A day is recorded only when the user finishes a learning session and DeepFlow creates growth evidence.
+
 ### `src/storage.js`
 
 Owns local-first persistence:
@@ -106,6 +119,7 @@ Owns local-first persistence:
 - create initial state
 - load/save/reset state
 - create local IDs
+- persist `learningCalendar` and `lastCalendarEntry` locally
 
 ### `src/cloudSync.js`
 
@@ -132,8 +146,51 @@ Do not put service role keys or private database secrets in this app.
 10. Timer starts locally.
 11. Completion creates a learning session record.
 12. `src/growthEvidence.js` creates growth evidence and applies EXP.
-13. `src/storage.js` persists local state.
-14. `src/cloudSync.js` optionally queues and uploads sync events.
+13. `src/learningCalendar.js` creates or updates the local daily learning record.
+14. The settlement screen shows that today's learning has been recorded.
+15. `src/storage.js` persists local state.
+16. `src/cloudSync.js` optionally queues and uploads sync events.
+
+## Home Layout Principles
+
+The home page is the user's long-term learning feedback surface, not only a prompt launch page.
+
+- The home role card should show only core identity and EXP state.
+- Keep role card content compact: main identity, secondary identity, level, EXP, upgrade distance, and current bonus.
+- Do not put a full recent EXP source list inside the home role card.
+- The learning calendar preview is a core home feedback component.
+- The calendar preview should show today's learning state, current streak, monthly sessions, monthly EXP, and recent 7-day learning marks.
+- Detailed recent records should live in the full learning calendar page or lower record/detail areas.
+- Top navigation should stay system-oriented and avoid competing with the home feedback area.
+
+## Learning Calendar Flow
+
+1. User starts any learning session and completes it.
+2. DeepFlow creates growth evidence and EXP as before.
+3. `addCompletedSessionToCalendar` creates a calendar entry using:
+   - date
+   - module
+   - session number or title
+   - topic
+   - mode
+   - duration
+   - EXP
+   - evidence types
+   - completed time
+4. If the same `sessionId` already exists on that date, no duplicate entry is added.
+5. The settlement page shows:
+   - today's learning has been recorded
+   - today's session count
+   - monthly session count
+   - current streak
+   - EXP gained
+6. The `学习日历` page shows a month view and date details.
+7. Optional Supabase sync queues these event types:
+   - `learning_calendar_entry_created`
+   - `daily_checkin_recorded`
+   - `learning_streak_updated`
+
+Calendar data is local-first and saved inside the active profile snapshot. Cloud sync is an event mirror for later admin review, not the source of truth for the MVP.
 
 ## Investment Learning Flow
 

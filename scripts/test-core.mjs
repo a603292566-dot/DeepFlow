@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { QUESTIONNAIRE_ITEMS, LEARNING_MODULES, LANGUAGE_TARGETS, MODE_LABELS } from "../src/domain.js";
 import { autoLanguageModulePlan, levelById, subjectById } from "../src/learningPath.js";
+import {
+  addCompletedSessionToCalendar,
+  getCalendarStats,
+  getRecentLearningDays,
+  getSessionsByDate,
+  getTodayDateKey
+} from "../src/learningCalendar.js";
 import { generatePrompt } from "../src/promptEngine.js";
 import { applyExp, calculateExp, generateIdentity, scoreQuestionnaire } from "../src/scoring.js";
 import {
@@ -143,11 +151,21 @@ function testInvestmentPromptGeneration() {
     investmentLevel: level,
     currentInvestmentLevel: level.id,
     investmentSessionNumber: 2,
-    currentStageSessionNumber: 2
+    currentStageSessionNumber: 2,
+    currentDate: "2026-06-18",
+    lastLearningDate: "2026-06-17",
+    currentStreak: 3,
+    todaySessionCount: 1,
+    monthlySessionCount: 5
   });
 
   assert.ok(prompt.includes("DeepFlow 投资知识学习教练"));
   assert.ok(prompt.includes("投资学习 Session 002"));
+  assert.ok(prompt.includes("本次学习日期：2026-06-18"));
+  assert.ok(prompt.includes("最近一次学习日期：2026-06-17"));
+  assert.ok(prompt.includes("当前连续学习：3 天"));
+  assert.ok(prompt.includes("今日已完成学习：1 次"));
+  assert.ok(prompt.includes("本月已完成学习：5 次"));
   assert.ok(prompt.includes("当前阶段学习次数：第 2 次"));
   assert.ok(prompt.includes("折现率"));
   assert.ok(prompt.includes("折现系数 / 现值系数"));
@@ -242,6 +260,125 @@ function testInvestmentExp() {
   assert.ok(exp.finalExp > 0);
 }
 
+function testLearningCalendarRecords() {
+  let calendar = {};
+  const sessionA = {
+    id: "session_a",
+    learningModuleId: "language",
+    learningModule: "语言学习",
+    subject: "德语",
+    learningGoal: "德语 C1",
+    mode: "light_start",
+    durationMinutes: 8,
+    expGained: 20
+  };
+  const sessionB = {
+    id: "session_b",
+    learningModuleId: "programming",
+    learningModule: "编程学习",
+    subject: "AI辅助编程",
+    learningGoal: "认识代码",
+    mode: "standard",
+    durationMinutes: 25,
+    expGained: 45
+  };
+  const evidenceA = { type: "light_start_completed", finalExp: 20 };
+  const evidenceB = { type: "standard_session_completed", finalExp: 45 };
+
+  const first = addCompletedSessionToCalendar(calendar, sessionA, evidenceA, "2026-06-18T09:00:00.000Z");
+  calendar = first.calendar;
+  assert.equal(first.added, true);
+  assert.equal(getTodayDateKey("2026-06-18T09:00:00.000Z"), "2026-06-18");
+
+  const duplicate = addCompletedSessionToCalendar(calendar, sessionA, evidenceA, "2026-06-18T09:05:00.000Z");
+  calendar = duplicate.calendar;
+  assert.equal(duplicate.added, false);
+  assert.equal(calendar["2026-06-18"].totalSessions, 1);
+
+  const second = addCompletedSessionToCalendar(calendar, sessionB, evidenceB, "2026-06-18T11:00:00.000Z");
+  calendar = second.calendar;
+  const sessions = getSessionsByDate(calendar, "2026-06-18");
+  const stats = getCalendarStats(calendar, "2026-06-18");
+
+  assert.equal(sessions.length, 2);
+  assert.equal(stats.currentStreak, 1);
+  assert.equal(stats.totalLearningDays, 1);
+  assert.equal(stats.monthlySessionCount, 2);
+  assert.equal(stats.monthlyTotalMinutes, 33);
+  assert.equal(stats.monthlyTotalExp, 65);
+
+  const persisted = JSON.parse(JSON.stringify({ learningCalendar: calendar }));
+  assert.equal(persisted.learningCalendar["2026-06-18"].totalSessions, 2);
+}
+
+function testLearningCalendarStreak() {
+  let calendar = {};
+  const session = {
+    learningModuleId: "math",
+    learningModule: "数学学习",
+    subject: "数学基础",
+    learningGoal: "概念理解",
+    mode: "light_start",
+    durationMinutes: 8,
+    expGained: 10
+  };
+  calendar = addCompletedSessionToCalendar(
+    calendar,
+    { ...session, id: "session_17" },
+    { type: "light_start_completed", finalExp: 10 },
+    "2026-06-17T08:00:00.000Z"
+  ).calendar;
+  calendar = addCompletedSessionToCalendar(
+    calendar,
+    { ...session, id: "session_18" },
+    { type: "light_start_completed", finalExp: 10 },
+    "2026-06-18T08:00:00.000Z"
+  ).calendar;
+
+  assert.equal(getCalendarStats(calendar, "2026-06-18").currentStreak, 2);
+  assert.equal(getCalendarStats(calendar, "2026-06-19").currentStreak, 0);
+}
+
+function testRecentLearningDays() {
+  let calendar = {};
+  const session = {
+    id: "session_recent",
+    learningModuleId: "language",
+    learningModule: "语言学习",
+    subject: "德语",
+    learningGoal: "telc C1",
+    mode: "light_start",
+    durationMinutes: 8,
+    expGained: 18
+  };
+  calendar = addCompletedSessionToCalendar(
+    calendar,
+    session,
+    { type: "light_start_completed", finalExp: 18 },
+    "2026-06-18T08:00:00.000Z"
+  ).calendar;
+
+  const recentDays = getRecentLearningDays(calendar, 7, "2026-06-18");
+  assert.equal(recentDays.length, 7);
+  assert.equal(recentDays[6].date, "2026-06-18");
+  assert.equal(recentDays[6].isToday, true);
+  assert.equal(recentDays[6].hasLearning, true);
+  assert.equal(recentDays[6].totalSessions, 1);
+  assert.equal(recentDays[0].hasLearning, false);
+}
+
+function testHomeLayoutSource() {
+  const source = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
+  assert.ok(source.includes("function renderLearningCalendarPreview"));
+  assert.ok(source.includes("home-status-grid"));
+  assert.ok(source.includes("calendar-preview-card"));
+  assert.ok(source.includes("今日已学习"));
+  assert.ok(source.includes("查看完整日历"));
+  assert.ok(source.includes("getRecentLearningDays(calendar, 7"));
+  assert.ok(!source.includes("近期 EXP 来源"));
+  assert.ok(!source.includes('data-action="learning-calendar">学习日历</button>'));
+}
+
 testQuestionnaireScoring();
 testIdentityGeneration();
 testExpCalculation();
@@ -252,5 +389,9 @@ testInvestmentPromptGeneration();
 testInvestmentMarketLogicPrompt();
 testInvestmentProfileProgression();
 testInvestmentExp();
+testLearningCalendarRecords();
+testLearningCalendarStreak();
+testRecentLearningDays();
+testHomeLayoutSource();
 
 console.log("Core logic tests passed.");

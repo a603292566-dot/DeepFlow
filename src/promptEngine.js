@@ -52,6 +52,11 @@ export function generatePrompt(context) {
 * 具体学科：${subject}
 * 当前水平：${currentLevel}
 * 学习目标：${learningGoal}
+${context.currentDate ? `* 本次学习日期：${context.currentDate}` : ""}
+${context.lastLearningDate ? `* 最近一次学习日期：${context.lastLearningDate}` : ""}
+${Number.isFinite(context.currentStreak) ? `* 当前连续学习：${context.currentStreak} 天` : ""}
+${Number.isFinite(context.todaySessionCount) ? `* 今日已完成学习：${context.todaySessionCount} 次` : ""}
+${Number.isFinite(context.monthlySessionCount) ? `* 本月已完成学习：${context.monthlySessionCount} 次` : ""}
 
 【当前状态】
 * 当前状态：${context.currentStatus || "状态已记录"}

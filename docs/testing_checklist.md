@@ -20,14 +20,22 @@ Use this checklist before each public test deployment.
 ## 3. Role Card
 
 - Return to the role card.
-- Confirm the role card stays minimal:
+- Confirm the home role card stays compact:
   - identity
   - level
   - EXP
   - progress bar
   - EXP to next level
-  - recent EXP sources
   - active bonus
+- Confirm the home role card does not show a full recent EXP source list.
+- Confirm the home page shows a `学习日历` overview beside or below the role card.
+- Confirm the overview shows:
+  - 今日已学习 / 今日未学习
+  - current streak
+  - monthly session count
+  - monthly EXP
+  - recent 7-day learning marks
+- Click `查看完整日历` and confirm the full calendar page opens.
 
 ## 4. Language Learning Path
 
@@ -134,15 +142,35 @@ Use this checklist before each public test deployment.
   - 结束并结算
 - Confirm optional AI feedback can be pasted or skipped.
 - Confirm EXP is added to the role card.
+- Confirm settlement shows `今日学习已记录`.
+- Confirm settlement shows today's session count, monthly session count, current streak, and gained EXP.
 
-## 10. Local Data
+## 10. Learning Calendar
+
+- Complete one learning session.
+- Return to the home page and confirm the calendar overview now shows today's learning as recorded.
+- Open `学习日历`.
+- Confirm today's date shows a learned marker, session count, and EXP.
+- Click today's date and confirm the completed session appears in the detail list.
+- Complete a second session on the same day.
+- Confirm today's date shows two sessions and combined EXP.
+- Refresh the page and confirm calendar data remains.
+- Confirm there is no manual check-in button.
+- Confirm repeating settlement or reopening pages does not duplicate the same session entry.
+- Confirm optional cloud sync queues or uploads:
+  - `learning_calendar_entry_created`
+  - `daily_checkin_recorded`
+  - `learning_streak_updated`
+
+## 11. Local Data
 
 - Refresh the page.
 - Confirm the current profile, role card, records, and EXP are preserved.
 - Create a second role.
 - Switch between roles and confirm data remains separated.
+- Confirm each role has its own learning calendar.
 
-## 11. Cloud Sync
+## 12. Cloud Sync
 
 - Open `云端同步`.
 - Confirm configuration status is visible.
@@ -150,7 +178,7 @@ Use this checklist before each public test deployment.
 - Confirm success or a clear pending/error state appears.
 - In Supabase Table Editor, confirm `deepflow_sync_events` receives the test event.
 
-## 12. PWA And Deployment
+## 13. PWA And Deployment
 
 - Run the build script.
 - Open the built site.
@@ -158,9 +186,10 @@ Use this checklist before each public test deployment.
 - Confirm mobile layout has no horizontal scroll.
 - Confirm the install help page explains iPhone, Android, Windows, and Mac usage.
 
-## 13. Mac App
+## 14. Mac App
 
 - Run the Mac build script.
 - Open `build/macos/DeepFlow.app` or `open-deepflow.command`.
 - Confirm the app is not blank.
 - Repeat the language learning path smoke test inside the Mac app.
+- Confirm `学习日历` opens inside the Mac app.

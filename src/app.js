@@ -60,6 +60,15 @@ import {
   shouldRecommendInvestmentProgression,
   updateInvestmentProfileAfterSession
 } from "./investmentLearning.js";
+import {
+  addCompletedSessionToCalendar,
+  formatCalendarDate,
+  getCalendarStats,
+  getMonthCalendar,
+  getRecentLearningDays,
+  getSessionsByDate,
+  getTodayDateKey
+} from "./learningCalendar.js";
 import { loadState, makeId, resetState, saveState } from "./storage.js";
 
 let state = loadState();
@@ -73,6 +82,9 @@ const PROFILE_DATA_FIELDS = [
   "prompts",
   "sessions",
   "evidence",
+  "learningCalendar",
+  "lastCalendarEntry",
+  "selectedCalendarDate",
   "selectedLearningModuleId",
   "selectedCategory",
   "selectedGoalId",
@@ -186,13 +198,6 @@ function normalizeLoadedState() {
 
 normalizeLoadedState();
 
-function recentExpSources(limit = 4) {
-  return state.evidence
-    .slice()
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    .slice(0, limit);
-}
-
 function currentGoals() {
   if (state.selectedLearningModuleId === "language") {
     return languageTargetsForSubject(state.selectedSubjectId);
@@ -302,6 +307,10 @@ function createPrompt(nextState, mode) {
   const investmentSessionNumber = investmentProfile ? nextInvestmentSessionNumber(investmentProfile) : null;
   const currentStageSessionNumber = investmentProfile ? (investmentProfile.currentStageSessionCount || 0) + 1 : null;
   const investmentTopic = investmentLevel ? investmentTopicForMode(investmentLevel.id, mode, investmentProfile) : "";
+  const todayKey = getTodayDateKey();
+  const calendarStats = getCalendarStats(nextState.learningCalendar || {}, todayKey);
+  const learningDays = Object.keys(nextState.learningCalendar || {}).sort();
+  const lastLearningDate = learningDays.filter((dateKey) => dateKey < todayKey).pop() || null;
   const context = {
     user: nextState.user,
     identity: nextState.identity,
@@ -329,6 +338,12 @@ function createPrompt(nextState, mode) {
     trainingMode: mode,
     duration: plannedDuration,
     plannedDuration,
+    currentDate: todayKey,
+    lastLearningDate,
+    currentStreak: calendarStats.currentStreak,
+    totalLearningDays: calendarStats.totalLearningDays,
+    monthlySessionCount: calendarStats.monthlySessionCount,
+    todaySessionCount: calendarStats.todaySessionCount,
     currentStatus: currentStatus?.label || "状态已记录",
     energyLevel: nextState.energyLevel ?? currentStatus?.energyLevel ?? null,
     fatigueLevel: nextState.fatigueLevel ?? currentStatus?.fatigueLevel ?? null,
@@ -368,6 +383,12 @@ function createPrompt(nextState, mode) {
     investmentSessionNumber,
     currentStageSessionNumber,
     investmentTopic,
+    currentDate: todayKey,
+    lastLearningDate,
+    currentStreak: calendarStats.currentStreak,
+    totalLearningDays: calendarStats.totalLearningDays,
+    monthlySessionCount: calendarStats.monthlySessionCount,
+    todaySessionCount: calendarStats.todaySessionCount,
     levelEvidenceId: levelEvidence ? currentLevel?.id : null,
     likelyEvidenceIds,
     currentStatus: context.currentStatus,
@@ -467,13 +488,13 @@ function shell(content) {
           </select>
         </label>
         <button class="ghost" data-action="create-new-role">创建新角色</button>
-        ${state.identity ? `<button class="ghost" data-action="home">角色卡</button>` : ""}
+        ${state.identity && state.screen !== "home" ? `<button class="ghost" data-action="home">首页</button>` : ""}
         <button class="ghost" data-action="cloud-settings">云端同步</button>
         <button class="ghost" data-action="install-help">添加到主屏幕</button>
       </div>
     `
     : state.identity
-      ? `<div class="profile-controls"><button class="ghost" data-action="create-new-role">创建新角色</button><button class="ghost" data-action="home">角色卡</button><button class="ghost" data-action="cloud-settings">云端同步</button><button class="ghost" data-action="install-help">添加到主屏幕</button></div>`
+      ? `<div class="profile-controls"><button class="ghost" data-action="create-new-role">创建新角色</button>${state.screen !== "home" ? `<button class="ghost" data-action="home">首页</button>` : ""}<button class="ghost" data-action="cloud-settings">云端同步</button><button class="ghost" data-action="install-help">添加到主屏幕</button></div>`
       : `<div class="profile-controls"><button class="ghost" data-action="cloud-settings">云端同步</button><button class="ghost" data-action="install-help">添加到主屏幕</button></div>`;
 
   return `
@@ -596,6 +617,65 @@ function renderCloudSettings() {
   `);
 }
 
+function renderLearningCalendar() {
+  const todayKey = getTodayDateKey();
+  const selectedDate = state.selectedCalendarDate || todayKey;
+  const calendar = state.learningCalendar || {};
+  const stats = getCalendarStats(calendar, todayKey);
+  const month = getMonthCalendar(calendar, selectedDate.slice(0, 7));
+  const selectedSessions = getSessionsByDate(calendar, selectedDate);
+  const todayDone = Boolean(calendar[todayKey]?.completedSessions?.length);
+
+  return shell(`
+    ${renderRoleCard()}
+    <section class="panel calendar-panel">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">成长证据日历</p>
+          <h2>${month.label}</h2>
+        </div>
+        <button class="ghost" data-action="home">返回角色卡</button>
+      </div>
+      <p class="notice">${todayDone ? "今日学习已记录。" : "今天还没有学习记录，完成一次学习后会自动记录。"}</p>
+      <div class="mini-grid">
+        <article><strong>${stats.currentStreak}</strong><span>当前连续学习天数</span></article>
+        <article><strong>${stats.totalLearningDays}</strong><span>累计学习天数</span></article>
+        <article><strong>${stats.monthlySessionCount}</strong><span>本月学习次数</span></article>
+        <article><strong>${stats.monthlyTotalMinutes}</strong><span>本月学习分钟</span></article>
+        <article><strong>${stats.monthlyTotalExp}</strong><span>本月获得 EXP</span></article>
+      </div>
+      <div class="calendar-weekdays">
+        ${["日", "一", "二", "三", "四", "五", "六"].map((day) => `<span>${day}</span>`).join("")}
+      </div>
+      <div class="calendar-grid">
+        ${month.days.map((day) =>
+          day.isBlank
+            ? `<div class="calendar-day blank"></div>`
+            : `<button class="calendar-day ${day.hasLearning ? "learned" : ""} ${day.date === todayKey ? "today" : ""} ${day.date === selectedDate ? "selected" : ""}" data-action="select-calendar-date" data-date="${day.date}">
+                <strong>${day.day}</strong>
+                ${day.date === todayKey ? `<span>今天</span>` : ""}
+                ${day.hasLearning ? `<span>已学 ${day.totalSessions} 次</span><span>+${day.totalExp} EXP</span>` : ""}
+              </button>`
+        ).join("")}
+      </div>
+      <section class="feedback-capture">
+        <h3>${formatCalendarDate(selectedDate)}</h3>
+        ${selectedSessions.length
+          ? `<div class="history-list">
+              ${selectedSessions.map((session) => `
+                <article class="history-item">
+                  <strong>${session.moduleLabel} · ${session.sessionTitle}</strong>
+                  <span>${MODE_LABELS[session.mode] || session.mode} / ${session.durationMinutes} 分钟 / +${session.expGained} EXP</span>
+                  <p>${session.topic}</p>
+                </article>
+              `).join("")}
+            </div>`
+          : `<p class="muted">这一天还没有学习记录。</p>`}
+      </section>
+    </section>
+  `);
+}
+
 function renderQuestionnaire() {
   const answered = state.draftAnswers || {};
   const items = QUESTIONNAIRE_ITEMS.map((item) => `
@@ -637,12 +717,11 @@ function renderQuestionnaire() {
 function renderRoleCard() {
   const identity = state.identity;
   const expPercent = Math.round((identity.currentExp / identity.requiredExp) * 100);
-  const sources = recentExpSources();
   const mainLabel = IDENTITY_LABELS[identity.mainIdentity];
   const secondaryLabel = IDENTITY_LABELS[identity.secondaryIdentity] || "正在形成";
 
   return `
-    <section class="role-card">
+    <section class="role-card compact-role-card">
       <div class="role-main">
         <div>
           <p class="eyebrow">角色卡</p>
@@ -656,30 +735,53 @@ function renderRoleCard() {
         <span>距离升级 ${Math.max(0, identity.requiredExp - identity.currentExp)}</span>
       </div>
       <div class="bar"><span style="width:${Math.min(100, expPercent)}%"></span></div>
-      <div class="mini-grid">
+      <div class="role-card-footer">
+        <p>当前经验加成：${bonusText(identity.mainIdentity)}</p>
+        <button class="ghost" data-action="identity-report">查看身份报告</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderLearningCalendarPreview() {
+  const todayKey = getTodayDateKey();
+  const calendar = state.learningCalendar || {};
+  const stats = getCalendarStats(calendar, todayKey);
+  const recentDays = getRecentLearningDays(calendar, 7, todayKey);
+  const todayDone = stats.todaySessionCount > 0;
+
+  return `
+    <section class="calendar-preview-card">
+      <div class="section-head compact-head">
         <div>
-          <strong>当前经验加成</strong>
-          <p>${bonusText(identity.mainIdentity)}</p>
+          <p class="eyebrow">学习日历</p>
+          <h3>${todayDone ? "今日已学习" : "今日未学习"}</h3>
         </div>
-        <div>
-          <strong>近期 EXP 来源</strong>
-          ${
-            sources.length
-              ? `<ul>${sources.map((source) => `<li>${source.label} +${source.finalExp}</li>`).join("")}</ul>`
-              : "<p>完成问卷后会显示近期来源。</p>"
-          }
-        </div>
+        <button class="ghost" data-action="learning-calendar">查看完整日历</button>
+      </div>
+      <p class="calendar-summary">连续 ${stats.currentStreak} 天 · 本月 ${stats.monthlySessionCount} 次 · +${stats.monthlyTotalExp} EXP · ${stats.monthlyTotalMinutes} 分钟</p>
+      <div class="recent-days" aria-label="最近 7 天学习状态">
+        ${recentDays.map((day) => `
+          <div class="recent-day ${day.hasLearning ? "learned" : ""} ${day.isToday ? "today" : ""}">
+            <span>${day.weekday}</span>
+            <strong>${day.isToday ? "今天" : day.day}</strong>
+            <em>${day.hasLearning ? "✓" : "·"}</em>
+          </div>
+        `).join("")}
       </div>
     </section>
   `;
 }
 
 function renderHome() {
+  const continueLabel = state.investmentProfile?.hasStarted ? "继续学习" : "开始学习";
   return shell(`
-    ${renderRoleCard()}
-    <section class="actions-row">
-      <button class="primary" data-action="select-category">开始学习</button>
-      <button class="secondary" data-action="identity-report">查看身份报告</button>
+    <section class="home-status-grid">
+      ${renderRoleCard()}
+      ${renderLearningCalendarPreview()}
+    </section>
+    <section class="home-action-panel">
+      <button class="primary prominent" data-action="select-category">${continueLabel}</button>
     </section>
     <section class="history-strip">
       <p class="eyebrow">基础记录</p>
@@ -1080,6 +1182,8 @@ function renderSettlement() {
   const session = state.lastCompletedSession;
   const completeTitle = session.mode === "light_start" ? "轻启动完成" : `${MODE_LABELS[session.mode]}完成`;
   const canGoDeeper = session.mode !== "deep";
+  const calendarEntry =
+    state.lastCalendarEntry?.sessionId === session.id ? state.lastCalendarEntry : null;
   return shell(`
     ${renderRoleCard()}
     <section class="panel">
@@ -1092,6 +1196,13 @@ function renderSettlement() {
         <p>实际时长：${session.durationMinutes} 分钟</p>
         <p>获得 EXP：+${session.expGained}</p>
       </div>
+      ${calendarEntry
+        ? `<div class="calendar-confirmation">
+            <strong>今日学习已记录。</strong>
+            <p>这是你今天的第 ${calendarEntry.todaySessionCount} 次学习。本月已完成 ${calendarEntry.monthlySessionCount} 次学习，当前连续学习 ${calendarEntry.currentStreak} 天，本次获得 +${calendarEntry.expGained} EXP。</p>
+            <button class="ghost" data-action="learning-calendar">查看学习日历</button>
+          </div>`
+        : ""}
       <section class="feedback-capture">
         <h3>AI 有给你反馈吗？</h3>
         <p class="muted">可以粘贴回来，DeepFlow 会帮你整理复习项；也可以跳过直接结算。</p>
@@ -1130,6 +1241,7 @@ function render() {
     welcome: renderWelcome,
     install_help: renderInstallHelp,
     cloud_settings: renderCloudSettings,
+    learning_calendar: renderLearningCalendar,
     questionnaire: renderQuestionnaire,
     questionnaire_feedback: renderQuestionnaireFeedback,
     home: renderHome,
@@ -1207,6 +1319,9 @@ app.addEventListener("submit", (event) => {
     prompts: [],
     sessions: [],
     evidence: [],
+    learningCalendar: {},
+    lastCalendarEntry: null,
+    selectedCalendarDate: null,
     selectedLearningModuleId: null,
     selectedCategory: null,
     selectedGoalId: null,
@@ -1275,6 +1390,8 @@ app.addEventListener("click", async (event) => {
     render();
   }
   if (action === "welcome") commit({ screen: "welcome" });
+  if (action === "learning-calendar") commit({ screen: "learning_calendar", selectedCalendarDate: getTodayDateKey() });
+  if (action === "select-calendar-date") commit({ selectedCalendarDate: actionTarget.dataset.date });
   if (action === "create-new-role") {
     commit({
       draftAnswers: undefined,
@@ -1571,10 +1688,6 @@ app.addEventListener("click", async (event) => {
           : item
       );
       const completedSession = updated.sessions.find((item) => item.id === session.id);
-      queueCloudEvent("session_completed", updated, {
-        session: completedSession,
-        evidence
-      });
       if (isInvestmentSession) {
         const nextProfile = updateInvestmentProfileAfterSession(updated.investmentProfile, {
           sessionNumber: session.investmentSessionNumber,
@@ -1588,6 +1701,51 @@ app.addEventListener("click", async (event) => {
           currentInvestmentLevel: nextProfile?.currentLevel,
           selectedCurrentLevelId: nextProfile?.currentLevel ? `investment_${nextProfile.currentLevel.toLowerCase()}` : updated.selectedCurrentLevelId
         };
+      }
+      const calendarResult = addCompletedSessionToCalendar(
+        updated.learningCalendar || {},
+        completedSession,
+        evidence,
+        endTime
+      );
+      const calendarStats = getCalendarStats(calendarResult.calendar, calendarResult.entry.date);
+      if (calendarResult.added) {
+        updated = {
+          ...updated,
+          learningCalendar: calendarResult.calendar,
+          lastCalendarEntry: {
+            ...calendarResult.entry,
+            todaySessionCount: calendarResult.dateRecord.totalSessions,
+            currentStreak: calendarStats.currentStreak,
+            totalLearningDays: calendarStats.totalLearningDays,
+            monthlySessionCount: calendarStats.monthlySessionCount,
+            monthlyTotalMinutes: calendarStats.monthlyTotalMinutes,
+            monthlyTotalExp: calendarStats.monthlyTotalExp
+          }
+        };
+        const calendarPayload = {
+          date: calendarResult.entry.date,
+          moduleId: calendarResult.entry.moduleId,
+          sessionId: calendarResult.entry.sessionId,
+          sessionNumber: calendarResult.entry.sessionNumber,
+          topic: calendarResult.entry.topic,
+          durationMinutes: calendarResult.entry.durationMinutes,
+          expGained: calendarResult.entry.expGained,
+          evidenceTypes: calendarResult.entry.evidenceTypes,
+          currentStreak: calendarStats.currentStreak,
+          totalLearningDays: calendarStats.totalLearningDays,
+          monthlySessionCount: calendarStats.monthlySessionCount,
+          createdAt: calendarResult.entry.completedAt
+        };
+        queueCloudEvent("learning_calendar_entry_created", updated, calendarPayload);
+        queueCloudEvent("daily_checkin_recorded", updated, calendarPayload);
+        queueCloudEvent("learning_streak_updated", updated, calendarPayload);
+      }
+      queueCloudEvent("session_completed", updated, {
+        session: completedSession,
+        evidence
+      });
+      if (isInvestmentSession) {
         queueCloudEvent("investment_session_completed", updated, {
           session: completedSession,
           evidence,

@@ -56,6 +56,7 @@ const sources = [
   "src/investmentPromptEngine.js",
   "src/promptEngine.js",
   "src/cloudSync.js",
+  "src/learningCalendar.js",
   "src/app.js"
 ];
 const scripts = await Promise.all(
